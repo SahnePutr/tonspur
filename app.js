@@ -31,8 +31,12 @@ let wiederholen = 'aus';    // 'aus', 'alle' oder 'eins'
 
 let aktuelleUrl = null;     // Adresse der Musikdatei, die gerade im Player steckt
 let vorgeladen = null;      // { id, url } des nächsten Liedes, schon bereitgelegt
-let startZeit = 0;          // Stelle im Lied, an der nach einem Neustart weitergemacht wird
+let letzteZeit = 0;         // zuletzt sicher bekannte Stelle im Lied (zum Weitermachen und Wiederherstellen)
+let pausiertSeit = 0;       // Zeitpunkt der letzten Pause (0 = läuft gerade)
+let ladeMarke = 0;          // zählt Ladevorgänge, damit ein veralteter nicht dazwischenfunkt
+let rettungen = 0;          // wie oft der Wächter das aktuelle Lied schon neu laden musste
 let reglerWirdGezogen = false;
+const VERSION = 2;          // steht unten in der Liederliste; so sieht man, ob ein Update angekommen ist
 const coverAdressen = new Map();   // Lied-Kennung -> Adresse des Coverbildes
 
 // Die Symbole als kleine Zeichnungen (SVG). "linie: true" heißt: nur Umriss statt Fläche.
@@ -99,7 +103,7 @@ async function start() {
 /** Merkt sich Warteschlange und Stelle, damit die App nach dem Schließen dort weitermacht. */
 function speichereZustand() {
   localStorage.setItem('tonspur-zustand', JSON.stringify({
-    basis, warteschlange, stelle, quelle, zufall, wiederholen, zeit: ton.currentTime || startZeit,
+    basis, warteschlange, stelle, quelle, zufall, wiederholen, zeit: letzteZeit,
   }));
 }
 
@@ -114,7 +118,7 @@ function ladeZustand() {
     quelle = z.quelle || '';
     zufall = !!z.zufall;
     wiederholen = z.wiederholen || 'aus';
-    startZeit = z.zeit || 0;
+    letzteZeit = z.zeit || 0;
   } catch {
     // Unlesbarer Zustand: einfach ohne Warteschlange starten.
   }
@@ -205,7 +209,7 @@ function zeichneLieder() {
 
   return kopf + SPIELKNOEPFE
     + `<ul>${lieder.map(liedZeile).join('')}</ul>`
-    + `<p class="fusszeile" id="speicherInfo">${lieder.length} Lieder</p>`;
+    + `<p class="fusszeile"><span id="speicherInfo">${lieder.length} Lieder</span> · Version ${VERSION}</p>`;
 }
 
 /** Auf dem iPhone in Safari: erklären, wie die Seite zur App auf dem Home-Bildschirm wird. */
@@ -326,7 +330,13 @@ function starteListe(ids, beginn, vonWo) {
 function spieleStelle() {
   const lied = aktuellesLied();
   if (!lied) return;
-  startZeit = 0;
+  letzteZeit = 0;
+  rettungen = 0;
+  ladeMarke++; // ein noch laufendes Neuladen des alten Liedes gilt ab jetzt nicht mehr
+
+  // Nach einer längeren Pause kann das iPhone die App eingefroren haben.
+  // Bereitgelegte Dateien sind dann manchmal unbrauchbar, deshalb werden sie frisch geholt.
+  if (nachLangerPause()) verwirfVorgeladenes();
 
   const starte = url => {
     const alteUrl = aktuelleUrl;
@@ -406,23 +416,82 @@ function vorheriges() {
 
 function playPause() {
   if (!aktuellesLied()) return;
-  if (!ton.src) { ladeAktuellesOhneStart(true); return; }
-  if (ton.paused) ton.play().catch(() => {}); else ton.pause();
+  if (ton.paused || !ton.src) setzeFort(); else ton.pause();
 }
 
-/** Nach einem Neustart: das zuletzt gehörte Lied wieder einlegen und an die alte Stelle spulen. */
-function ladeAktuellesOhneStart(danachSpielen) {
+/** War die Wiedergabe länger als 3 Sekunden angehalten? */
+function nachLangerPause() {
+  return pausiertSeit > 0 && Date.now() - pausiertSeit > 3000;
+}
+
+/**
+ * Macht nach einer Pause weiter.
+ * Das iPhone friert die App ein, wenn eine Weile nichts läuft. Danach tut der Player
+ * manchmal nur so, als würde er spielen: kein Ton, Zeit bleibt bei 0:00.
+ * Deshalb wird das Lied nach einer längeren Pause frisch aus dem Speicher geholt
+ * und an die gemerkte Stelle gespult, statt einfach nur "weiter" zu drücken.
+ */
+function setzeFort() {
+  if (!aktuellesLied()) return;
+  const gesund = ton.src && !ton.error && ton.readyState >= 2; // 2 = es liegen abspielbare Daten vor
+  // War das Lied schon zu Ende (letztes Lied der Playlist), beginnt es wieder von vorn.
+  const amEnde = ton.ended || (liedDauer() > 0 && letzteZeit > liedDauer() - 1);
+  const zeit = amEnde ? 0 : letzteZeit;
+  if (nachLangerPause() || !gesund) ladeNeu(zeit, true);
+  else ton.play().catch(() => ladeNeu(zeit, true));
+}
+
+/** Legt das aktuelle Lied frisch ein und spult an die Stelle "zeit" (in Sekunden). */
+function ladeNeu(zeit, danachSpielen) {
   const lied = aktuellesLied();
   if (!lied) return;
+  const marke = ++ladeMarke;
+  verwirfVorgeladenes();
+
   dbHole('dateien', lied.id).then(datei => {
-    if (!datei) return;
-    aktuelleUrl = URL.createObjectURL(datei);
-    ton.src = aktuelleUrl;
-    if (startZeit > 0) ton.addEventListener('loadedmetadata', () => { ton.currentTime = startZeit; }, { once: true });
+    // Abbrechen, wenn inzwischen ein anderes Lied oder ein neuerer Ladevorgang dran ist
+    if (!datei || marke !== ladeMarke || !aktuellesLied() || aktuellesLied().id !== lied.id) return;
+
+    const alteUrl = aktuelleUrl;
+    const url = URL.createObjectURL(datei);
+    aktuelleUrl = url;
+    ton.src = url;
+    if (zeit > 0) {
+      ton.addEventListener('loadedmetadata', () => { if (aktuelleUrl === url) ton.currentTime = zeit; }, { once: true });
+    }
     if (danachSpielen) ton.play().catch(() => {});
+    if (alteUrl) URL.revokeObjectURL(alteUrl);
     legeNaechstesBereit();
   });
 }
+
+/** Länge des aktuellen Liedes. Kennt der Player sie gerade nicht, hilft der gespeicherte Wert. */
+function liedDauer() {
+  if (isFinite(ton.duration) && ton.duration > 0) return ton.duration;
+  const lied = aktuellesLied();
+  return lied && lied.dauer ? lied.dauer : 0;
+}
+
+/**
+ * Wächter: schaut alle 1,5 Sekunden nach, ob die Zeit wirklich weiterläuft.
+ * Steht sie trotz "spielt" etwa 5 Sekunden still, wird das Lied neu geladen (höchstens zweimal).
+ */
+let waechterZeit = 0;
+let stillstand = 0;
+setInterval(() => {
+  if (ton.paused || ton.ended || ton.seeking || !aktuellesLied()) { stillstand = 0; return; }
+  if (Math.abs(ton.currentTime - waechterZeit) > 0.05) {
+    waechterZeit = ton.currentTime;
+    stillstand = 0;
+    return;
+  }
+  stillstand++;
+  if (stillstand >= 3 && rettungen < 2) {
+    rettungen++;
+    stillstand = 0;
+    ladeNeu(letzteZeit, true);
+  }
+}, 1500);
 
 function schalteZufall() {
   zufall = !zufall;
@@ -468,7 +537,7 @@ function zeigeSpielstand() {
 }
 
 function zeigeFortschritt() {
-  const dauer = ton.duration || (aktuellesLied() && aktuellesLied().dauer) || 0;
+  const dauer = liedDauer();
   const anteil = dauer ? Math.min(1, ton.currentTime / dauer) : 0;
   el('miniBalken').style.width = `${anteil * 100}%`;
   if (!reglerWirdGezogen) {
@@ -482,8 +551,11 @@ function zeigeFortschritt() {
 // Was das Ton-Element meldet:
 ton.addEventListener('ended', () => naechstes(true));          // Lied zu Ende: sofort das nächste
 ton.addEventListener('play', () => { zeigeSpielstand(); meldePosition(); });
-ton.addEventListener('pause', () => { zeigeSpielstand(); speichereZustand(); });
+ton.addEventListener('playing', () => { pausiertSeit = 0; });   // es kommt wirklich Ton
+ton.addEventListener('pause', () => { pausiertSeit = Date.now(); zeigeSpielstand(); speichereZustand(); });
+ton.addEventListener('seeked', () => { letzteZeit = ton.currentTime; });
 ton.addEventListener('timeupdate', () => {
+  if (ton.currentTime > 0) letzteZeit = ton.currentTime;       // Stelle merken, solange der Player gesund ist
   zeigeFortschritt();
   if (Math.floor(ton.currentTime) % 5 === 0) speichereZustand(); // ungefähr alle 5 Sekunden merken
 });
@@ -505,11 +577,16 @@ el('zeitRegler').addEventListener('input', () => {
   reglerWirdGezogen = true;
   const anteil = el('zeitRegler').value / 1000;
   el('zeitRegler').style.setProperty('--stand', `${anteil * 100}%`);
-  el('zeitJetzt').textContent = alsZeit(anteil * (ton.duration || 0));
+  el('zeitJetzt').textContent = alsZeit(anteil * liedDauer());
 });
 el('zeitRegler').addEventListener('change', () => {
-  if (ton.duration) ton.currentTime = el('zeitRegler').value / 1000 * ton.duration;
   reglerWirdGezogen = false;
+  const ziel = el('zeitRegler').value / 1000 * liedDauer();
+  if (!liedDauer()) return;
+  letzteZeit = ziel;
+  // Hat der Player gerade keine Daten (z. B. nach dem Einfrieren), wird das Lied an der Zielstelle neu geladen.
+  if (ton.readyState >= 1 && !ton.error) ton.currentTime = ziel;
+  else ladeNeu(ziel, !ton.paused);
 });
 
 // ---------- 5. Sperrbildschirm, Kontrollzentrum und Kopfhörer ----------
@@ -519,7 +596,7 @@ el('zeitRegler').addEventListener('change', () => {
 function richteSperrbildschirmEin() {
   if (!('mediaSession' in navigator)) return;
   const tasten = {
-    play: () => playPause(),
+    play: () => setzeFort(),
     pause: () => ton.pause(),
     nexttrack: () => naechstes(false),
     previoustrack: () => vorheriges(),
@@ -803,6 +880,26 @@ function playlistMenue() {
   ]);
 }
 
+/**
+ * Zeigt den inneren Zustand des Players. Das hilft bei der Fehlersuche auf dem iPhone,
+ * weil man dort sonst nicht hineinschauen kann.
+ */
+function zeigeDiagnose() {
+  alert([
+    `Tonspur Version ${VERSION}`,
+    `pausiert: ${ton.paused ? 'ja' : 'nein'}`,
+    `Daten bereit (0-4): ${ton.readyState}`,
+    `Ladezustand (0-3): ${ton.networkState}`,
+    `Zeit: ${ton.currentTime.toFixed(1)} von ${ton.duration}`,
+    `gemerkte Stelle: ${letzteZeit.toFixed(1)}`,
+    `Fehlernummer: ${ton.error ? ton.error.code : 'keine'}`,
+    `Rettungen durch den Waechter: ${rettungen}`,
+    `Sekunden seit Pause: ${pausiertSeit ? Math.round((Date.now() - pausiertSeit) / 1000) : '-'}`,
+    `als App installiert: ${navigator.standalone === true ? 'ja' : 'nein'}`,
+    `Offline-Helfer aktiv: ${navigator.serviceWorker && navigator.serviceWorker.controller ? 'ja' : 'nein'}`,
+  ].join('\n'));
+}
+
 /** Der Name, der im großen Player oben steht ("Deine Musik", "Suche" oder der Playlist-Name). */
 function nameDerAnsicht() {
   if (ansicht.name === 'playlist') {
@@ -827,7 +924,13 @@ const AKTIONEN = {
     starteListe(ids, Math.floor(Math.random() * ids.length), nameDerAnsicht());
   },
   menue: knopf => { const lied = findeLied(knopf.dataset.id); if (lied) liedMenue(lied); },
-  menueAktuell: () => { if (aktuellesLied()) liedMenue(aktuellesLied()); },
+  menueAktuell: () => {
+    if (!aktuellesLied()) return;
+    liedMenue(aktuellesLied());
+    // Im großen Player gibt es zusätzlich die Diagnose für die Fehlersuche.
+    blattEintraege.push({ text: 'Diagnose anzeigen', tue: zeigeDiagnose });
+    el('blatt').insertAdjacentHTML('beforeend', `<button data-aktion="blattWahl" data-nr="${blattEintraege.length - 1}">Diagnose anzeigen</button>`);
+  },
   neuePlaylist: () => neuePlaylist(),
   oeffnePlaylist: zeile => wechsleAnsicht('playlist', zeile.dataset.id),
   playlistMenue: () => playlistMenue(),
@@ -869,4 +972,5 @@ document.addEventListener('drop', ereignis => {
 // Wenn die App in den Hintergrund geht, den Stand sichern.
 document.addEventListener('visibilitychange', () => { if (document.hidden) speichereZustand(); });
 
-start().then(() => { if (aktuellesLied()) ladeAktuellesOhneStart(false); });
+// Nach dem Start das zuletzt gehörte Lied wieder einlegen (ohne es abzuspielen).
+start().then(() => { if (aktuellesLied()) ladeNeu(letzteZeit, false); });
