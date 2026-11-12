@@ -20,7 +20,9 @@ const ton = el('ton');
 
 let lieder = [];            // alle Lieder (ohne die Musikdaten selbst)
 let playlists = [];         // { id, name, liedIds: [...] }
-let ansicht = { name: 'lieder', playlistId: null };
+// Welche Seite gerade zu sehen ist: 'playlists' (die Startseite), 'playlist' (eine einzelne),
+// 'lieder' (alle Lieder) oder 'suche'. Die App beginnt immer auf der Startseite.
+let ansicht = { name: 'playlists', playlistId: null };
 
 let basis = [];             // Lied-Kennungen in der ursprünglichen Reihenfolge
 let warteschlange = [];     // dieselben Kennungen in der Abspiel-Reihenfolge (bei Zufall gemischt)
@@ -45,10 +47,10 @@ let onlineHinweis = '';     // Statuszeile der Online-Suche ("Suche läuft", Feh
 let suchWecker = null;      // wartet kurz nach dem Tippen, bevor online gesucht wird
 let suchNummer = 0;         // zählt Suchen, damit eine alte Antwort keine neuere überschreibt
 let reglerWirdGezogen = false;
-const VERSION = 6;       // steht unten in der Liederliste; so sieht man, ob ein Update angekommen ist
+const VERSION = 7;       // steht unten auf der Startseite; so sieht man, ob ein Update angekommen ist
 
 // Protokoll für die Fehlersuche: Die App schreibt mit, was der Player tut.
-// Ansehen kann man es unter "Lieder" ganz unten über "Diagnose".
+// Ansehen kann man es auf der Startseite ganz unten über "Diagnose".
 let protokoll = [];
 try { protokoll = JSON.parse(localStorage.getItem('tonspur-protokoll') || '[]'); } catch { protokoll = []; }
 
@@ -82,6 +84,7 @@ const SYMBOLE = {
   mehr: { pfad: 'M6 10a2 2 0 100 4 2 2 0 000-4zm6 0a2 2 0 100 4 2 2 0 000-4zm6 0a2 2 0 100 4 2 2 0 000-4z' },
   note: { pfad: 'M9 3h10v4h-8v10a3 3 0 11-2-2.83z' },
   liste: { pfad: 'M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z' },
+  haus: { pfad: 'M12 3.2l9 7.6V21h-6.2v-6.4H9.2V21H3V10.8z' },
   runter: { pfad: 'M6.4 8.6L12 14.2l5.6-5.6L19 10l-7 7-7-7z' },
   laden: { pfad: 'M11 4h2v8.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4L11 12.2zM5 18h14v2H5z' },
   haken: { pfad: 'M9.5 16.2L5.3 12l-1.4 1.4 5.6 5.6 11-11-1.4-1.4z' },
@@ -195,11 +198,12 @@ function zeichne() {
   else if (ansicht.name === 'playlists') inhalt.innerHTML = zeichnePlaylists();
   else inhalt.innerHTML = zeichnePlaylist();
 
-  // In der Leiste unten den passenden Bereich hervorheben
-  const bereich = ansicht.name === 'playlist' ? 'playlists' : ansicht.name;
+  // In der Leiste unten den passenden Bereich hervorheben.
+  // Eine einzelne Playlist und "Alle Lieder" gehören beide zur Startseite.
+  const bereich = ansicht.name === 'suche' ? 'suche' : 'playlists';
   document.querySelectorAll('.leiste button').forEach(k => k.classList.toggle('aktiv', k.dataset.ansicht === bereich));
 
-  if (ansicht.name === 'lieder') zeigeSpeicherplatz();
+  if (ansicht.name === 'playlists') zeigeSpeicherplatz();
   if (ansicht.name === 'suche') zeigeSuchTreffer();
 }
 
@@ -286,28 +290,33 @@ function zeigeSchleife() {
   });
 }
 
+/** Der Block, der erscheint, solange noch gar keine Musik in der App ist. */
+function leereBibliothek() {
+  return `
+    <div class="leer">
+      <div class="kreis">${symbol('note')}</div>
+      <h2>Noch keine Musik</h2>
+      <p class="hinweis">Tippe auf „Musik hinzufügen“ und wähle deine MP3-Dateien aus. Sie werden in der App gespeichert und laufen danach auch ohne Internet.</p>
+      <button class="pille akzent" data-aktion="hinzufuegen">${symbol('plus')}Musik hinzufügen</button>
+      <button class="pille" data-aktion="onlineEntdecken">${symbol('suche')}Online entdecken</button>
+      ${installHinweis()}
+    </div>`;
+}
+
+/** Die Seite "Alle Lieder": jedes Lied, das auf dem Gerät ist. Man erreicht sie über die Startseite. */
 function zeichneLieder() {
   const kopf = `
+    <button class="zurueck-link" data-aktion="ansicht" data-ansicht="playlists">${symbol('runter')}Start</button>
     <div class="kopfzeile">
-      <h1>Deine Musik</h1>
+      <h1>Alle Lieder</h1>
       <button class="rundknopf" data-aktion="hinzufuegen" aria-label="Musik hinzufügen">${symbol('plus')}</button>
     </div>`;
 
-  if (lieder.length === 0) {
-    return kopf + `
-      <div class="leer">
-        <div class="kreis">${symbol('note')}</div>
-        <h2>Noch keine Musik</h2>
-        <p class="hinweis">Tippe auf „Musik hinzufügen“ und wähle deine MP3-Dateien aus. Sie werden in der App gespeichert und laufen danach auch ohne Internet.</p>
-        <button class="pille akzent" data-aktion="hinzufuegen">${symbol('plus')}Musik hinzufügen</button>
-        <button class="pille" data-aktion="onlineEntdecken">${symbol('suche')}Online entdecken</button>
-        ${installHinweis()}
-      </div>`;
-  }
+  if (lieder.length === 0) return kopf + leereBibliothek();
 
   return kopf + spielKnoepfe()
     + `<ul>${lieder.map(liedZeile).join('')}</ul>`
-    + `<p class="fusszeile"><span id="speicherInfo">${lieder.length} Lieder</span> · Version ${VERSION} · <button class="textlink" data-aktion="diagnose">Diagnose</button></p>`;
+    + `<p class="fusszeile">${lieder.length} Lieder</p>`;
 }
 
 /** Auf dem iPhone in Safari: erklären, wie die Seite zur App auf dem Home-Bildschirm wird. */
@@ -574,12 +583,42 @@ function zeichnePlaylists() {
       </li>`;
   }).join('');
 
-  return `
+  const kopf = `
     <div class="kopfzeile">
-      <h1>Playlists</h1>
-      <button class="rundknopf" data-aktion="neuePlaylist" aria-label="Neue Playlist">${symbol('plus')}</button>
-    </div>
-    ${playlists.length ? `<ul>${zeilen}</ul>` : '<p class="hinweis">Noch keine Playlist. Mit dem Plus legst du eine an. Lieder fügst du über die drei Punkte neben einem Lied hinzu.</p>'}`;
+      <h1>Deine Playlists</h1>
+      <button class="rundknopf" data-aktion="startPlus" aria-label="Hinzufügen">${symbol('plus')}</button>
+    </div>`;
+  // Die Fußzeile zeigt die Version: Daran sieht man, ob ein Update angekommen ist.
+  const fuss = `<p class="fusszeile"><span id="speicherInfo">${lieder.length} Lieder</span> · Version ${VERSION} · <button class="textlink" data-aktion="diagnose">Diagnose</button></p>`;
+
+  // Ganz am Anfang (keine Musik, keine Playlist) erklärt die Startseite, wie Musik hineinkommt.
+  if (lieder.length === 0 && playlists.length === 0) return kopf + leereBibliothek() + fuss;
+
+  // Unter den Playlists steht ein fester Eintrag, der zu allen Liedern führt.
+  const alleLieder = `
+    <h2 class="abschnitt">Bibliothek</h2>
+    <ul>
+      <li class="zeile" data-aktion="ansicht" data-ansicht="lieder">
+        <div class="cover klein sammlung">${symbol('note')}</div>
+        <div class="zeilen-text">
+          <div class="titel">Alle Lieder</div>
+          <div class="unter">${lieder.length} Lieder</div>
+        </div>
+      </li>
+    </ul>`;
+
+  return kopf
+    + (playlists.length ? `<ul>${zeilen}</ul>` : '<p class="hinweis">Noch keine Playlist. Mit dem Plus legst du eine an. Lieder fügst du über die drei Punkte neben einem Lied hinzu.</p>')
+    + alleLieder + fuss;
+}
+
+/** Das Plus auf der Startseite: neue Playlist anlegen oder Musikdateien hinzufügen. */
+function startMenue() {
+  zeigeBlatt('Hinzufügen', [
+    { text: 'Neue Playlist', tue: () => neuePlaylist() },
+    // Die Dateiauswahl öffnet sich nur direkt aus einem Tipp heraus; das ist hier der Fall.
+    { text: 'Musik hinzufügen', tue: () => el('dateiWahl').click() },
+  ]);
 }
 
 function zeichnePlaylist() {
@@ -589,7 +628,7 @@ function zeichnePlaylist() {
   const gesamt = inhalt.reduce((summe, l) => summe + (l.dauer || 0), 0);
 
   return `
-    <button class="zurueck-link" data-aktion="ansicht" data-ansicht="playlists">${symbol('runter')}Playlists</button>
+    <button class="zurueck-link" data-aktion="ansicht" data-ansicht="playlists">${symbol('runter')}Start</button>
     <div class="playlist-kopf">
       <div class="cover mittel">${coverInhalt(inhalt.find(l => l.cover))}</div>
       <div class="zeilen-text">
@@ -599,7 +638,7 @@ function zeichnePlaylist() {
       <button class="symbolknopf" data-aktion="playlistMenue" aria-label="Mehr">${symbol('mehr')}</button>
     </div>
     ${inhalt.length ? spielKnoepfe() + `<ul>${inhalt.map(liedZeile).join('')}</ul>`
-      : '<p class="hinweis">Diese Playlist ist leer. Geh zu „Lieder“, tippe bei einem Lied auf die drei Punkte und wähle „Zu Playlist hinzufügen“.</p>'}`;
+      : '<p class="hinweis">Diese Playlist ist leer. Geh auf der Startseite zu „Alle Lieder“, tippe bei einem Lied auf die drei Punkte und wähle „Zu Playlist hinzufügen“.</p>'}`;
 }
 
 // ---------- 4. Abspielen ----------
@@ -1458,14 +1497,14 @@ function zeigeDiagnose() {
   el('blatt').scrollTop = el('blatt').scrollHeight;
 }
 
-/** Der Name, der im großen Player oben steht ("Deine Musik", "Suche" oder der Playlist-Name). */
+/** Der Name, der im großen Player oben steht ("Alle Lieder", "Suche" oder der Playlist-Name). */
 function nameDerAnsicht() {
   if (ansicht.name === 'playlist') {
     const liste = playlists.find(p => p.id === ansicht.playlistId);
     return liste ? liste.name : '';
   }
   if (ansicht.name === 'suche') return suchModus === 'online' ? 'Online-Suche' : 'Suche';
-  return 'Deine Musik';
+  return 'Alle Lieder';
 }
 
 // Jeder Knopf trägt im HTML ein data-aktion="...". Hier steht, was die Aktion tut.
@@ -1512,6 +1551,7 @@ const AKTIONEN = {
     el('blatt').insertAdjacentHTML('beforeend', `<button data-aktion="blattWahl" data-nr="${blattEintraege.length - 1}">Diagnose anzeigen</button>`);
   },
   neuePlaylist: () => neuePlaylist(),
+  startPlus: () => startMenue(),
   oeffnePlaylist: zeile => wechsleAnsicht('playlist', zeile.dataset.id),
   playlistMenue: () => playlistMenue(),
   playPause: () => playPause(),

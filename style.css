@@ -235,6 +235,11 @@ ul { list-style: none; margin: 0; padding: 0; }
 }
 .kasten b { color: var(--text); }
 
+/* Zwischenüberschrift auf der Startseite ("Bibliothek") */
+.abschnitt { margin: 28px 0 8px; font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--leise); }
+/* Das Kästchen vor "Alle Lieder": Note auf der Akzentfarbe statt eines Covers */
+.cover.sammlung { background: var(--akzent); color: var(--hintergrund); }
+
 .fusszeile { margin-top: 24px; text-align: center; font-size: 12px; color: var(--leise); }
 .textlink { text-decoration: underline; font-size: 12px; color: var(--leise); }
 

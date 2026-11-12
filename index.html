@@ -21,7 +21,7 @@
 </head>
 <body>
 
-  <!-- Hier zeichnet app.js die jeweilige Ansicht hinein (Lieder, Suche, Playlists). -->
+  <!-- Hier zeichnet app.js die jeweilige Ansicht hinein (Startseite mit Playlists, Alle Lieder, Suche). -->
   <main id="inhalt"></main>
 
   <!-- Kleiner Player über der Leiste. Ein Tipp darauf öffnet den großen Player. -->
@@ -35,11 +35,10 @@
     <div class="mini-fortschritt"><div id="miniBalken"></div></div>
   </div>
 
-  <!-- Leiste unten mit den drei Bereichen -->
+  <!-- Leiste unten mit den zwei Bereichen. "Start" zeigt die Playlists und führt zu "Alle Lieder". -->
   <nav class="leiste">
-    <button data-aktion="ansicht" data-ansicht="lieder"><span data-symbol="note"></span>Lieder</button>
+    <button data-aktion="ansicht" data-ansicht="playlists"><span data-symbol="haus"></span>Start</button>
     <button data-aktion="ansicht" data-ansicht="suche"><span data-symbol="suche"></span>Suche</button>
-    <button data-aktion="ansicht" data-ansicht="playlists"><span data-symbol="liste"></span>Playlists</button>
   </nav>
 
   <!-- Großer Player (füllt den ganzen Bildschirm) -->
