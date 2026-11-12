@@ -37,8 +37,15 @@ let pruefWecker = null;     // Zeitgeber, der kurz nach dem Start nachsieht, ob 
 let pausiertSeit = 0;       // Zeitpunkt der letzten Pause (0 = läuft gerade)
 let ladeMarke = 0;          // zählt Ladevorgänge, damit ein veralteter nicht dazwischenfunkt
 let rettungen = 0;          // wie oft der Wächter das aktuelle Lied schon neu laden musste
+let uebersprungen = 0;      // wie viele Nur-online-Lieder ohne Internet hintereinander übersprungen wurden
+let suchModus = 'eigene';   // Suche in 'eigene' (Bibliothek) oder 'online' (Musikquellen im Internet)
+let suchText = '';          // letzter Suchbegriff, damit er beim Zurückkommen noch dasteht
+let onlineTreffer = [];     // Ergebnisse der letzten Online-Suche
+let onlineHinweis = '';     // Statuszeile der Online-Suche ("Suche läuft", Fehler einer Quelle ...)
+let suchWecker = null;      // wartet kurz nach dem Tippen, bevor online gesucht wird
+let suchNummer = 0;         // zählt Suchen, damit eine alte Antwort keine neuere überschreibt
 let reglerWirdGezogen = false;
-const VERSION = 4;         // steht unten in der Liederliste; so sieht man, ob ein Update angekommen ist
+const VERSION = 5;        // steht unten in der Liederliste; so sieht man, ob ein Update angekommen ist
 
 // Protokoll für die Fehlersuche: Die App schreibt mit, was der Player tut.
 // Ansehen kann man es unter "Lieder" ganz unten über "Diagnose".
@@ -76,6 +83,8 @@ const SYMBOLE = {
   note: { pfad: 'M9 3h10v4h-8v10a3 3 0 11-2-2.83z' },
   liste: { pfad: 'M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z' },
   runter: { pfad: 'M6.4 8.6L12 14.2l5.6-5.6L19 10l-7 7-7-7z' },
+  laden: { pfad: 'M11 4h2v8.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4L11 12.2zM5 18h14v2H5z' },
+  haken: { pfad: 'M9.5 16.2L5.3 12l-1.4 1.4 5.6 5.6 11-11-1.4-1.4z' },
   suche: { pfad: 'M10.5 4a6.5 6.5 0 104 11.6l4.4 4.4 1.1-1.1-4.4-4.4A6.5 6.5 0 0010.5 4zm0 1.6a4.9 4.9 0 110 9.8 4.9 4.9 0 010-9.8z' },
   zufall: { linie: true, pfad: 'M3 7h3.5c2 0 3.3 1 4.5 3l2 4c1.2 2 2.5 3 4.5 3H21M18 14l3 3-3 3M3 17h3.5c1.2 0 2.2-.4 3-1.2M21 7h-3.5c-1.2 0-2.2.4-3 1.2M18 4l3 3-3 3' },
   wiederholen: { linie: true, pfad: 'M4 12V9a3 3 0 013-3h11M15 3l3 3-3 3M20 12v3a3 3 0 01-3 3H6M9 21l-3-3 3-3' },
@@ -101,7 +110,26 @@ function alsZeit(sekunden) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-const findeLied = id => lieder.find(l => l.id === id);
+// "Gäste" sind Lieder aus der Online-Suche, die man nur anhört, ohne sie in die Bibliothek zu nehmen.
+const gaeste = new Map();
+const findeLied = id => lieder.find(l => l.id === id) || gaeste.get(id);
+
+/** Ein Lied ist "nur online", wenn keine Datei auf dem Gerät liegt und es aus dem Internet gestreamt wird. */
+const istNurOnline = lied => lied.offline === false;
+
+/**
+ * Liefert die Adresse, von der das Lied abgespielt wird:
+ * bei gespeicherten Liedern die Datei vom Gerät, sonst die Internet-Adresse der Quelle.
+ */
+function holeTon(lied) {
+  if (istNurOnline(lied)) return Promise.resolve(lied.strom || null);
+  return dbHole('dateien', lied.id).then(datei => (datei ? URL.createObjectURL(datei) : (lied.strom || null)));
+}
+
+/** Gibt eine Geräte-Datei im Arbeitsspeicher wieder frei. Internet-Adressen brauchen das nicht. */
+function gibFrei(url) {
+  if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
+}
 const aktuellesLied = () => findeLied(warteschlange[stelle]);
 
 // ---------- 2. Start ----------
@@ -165,6 +193,7 @@ function zeichne() {
   document.querySelectorAll('.leiste button').forEach(k => k.classList.toggle('aktiv', k.dataset.ansicht === bereich));
 
   if (ansicht.name === 'lieder') zeigeSpeicherplatz();
+  if (ansicht.name === 'suche') zeigeSuchTreffer();
 }
 
 function wechsleAnsicht(name, playlistId = null) {
@@ -179,12 +208,18 @@ function sichtbareIds() {
     const liste = playlists.find(p => p.id === ansicht.playlistId);
     return liste ? liste.liedIds.filter(findeLied) : [];
   }
-  if (ansicht.name === 'suche') return sucheLieder(el('suchfeld') ? el('suchfeld').value : '').map(l => l.id);
+  if (ansicht.name === 'suche') {
+    return suchModus === 'online'
+      ? onlineTreffer.map(t => liedFuerTreffer(t).id)
+      : sucheLieder(suchText).map(l => l.id);
+  }
   return lieder.map(l => l.id);
 }
 
 function coverAdresse(lied) {
-  if (!lied || !lied.cover) return null;
+  if (!lied) return null;
+  // Ein auf dem Gerät gespeichertes Cover hat Vorrang, sonst die Bildadresse der Online-Quelle.
+  if (!lied.cover) return lied.coverUrl || null;
   if (!coverAdressen.has(lied.id)) coverAdressen.set(lied.id, URL.createObjectURL(lied.cover));
   return coverAdressen.get(lied.id);
 }
@@ -192,17 +227,22 @@ function coverAdresse(lied) {
 /** Inhalt eines Cover-Kästchens: das Bild oder, wenn es keins gibt, eine Note. */
 function coverInhalt(lied) {
   const adresse = coverAdresse(lied);
-  return adresse ? `<img src="${adresse}" alt="" loading="lazy">` : symbol('note');
+  // Lässt sich ein Bild nicht laden (z. B. ohne Internet), verschwindet es einfach.
+  return adresse ? `<img src="${sicher(adresse)}" alt="" loading="lazy" onerror="this.remove()">` : symbol('note');
 }
 
 function liedZeile(lied) {
   const laeuft = aktuellesLied() && aktuellesLied().id === lied.id;
+  const nurOnline = istNurOnline(lied);
+  // Nur-online-Lieder sind markiert. Ohne Internet werden sie blass dargestellt.
+  const marke = nurOnline ? '<span class="marke">online</span>' : '';
+  const klassen = `zeile${laeuft ? ' aktiv' : ''}${nurOnline && !navigator.onLine ? ' gesperrt' : ''}`;
   return `
-    <li class="zeile${laeuft ? ' aktiv' : ''}" data-aktion="spielen" data-id="${lied.id}">
+    <li class="${klassen}" data-aktion="spielen" data-id="${lied.id}">
       <div class="cover klein">${coverInhalt(lied)}</div>
       <div class="zeilen-text">
         <div class="titel">${sicher(lied.titel)}</div>
-        <div class="unter">${sicher(lied.kuenstler || 'Unbekannt')}</div>
+        <div class="unter">${marke}${sicher(lied.kuenstler || 'Unbekannt')}</div>
       </div>
       <span class="dauer" data-dauer="${lied.id}">${lied.dauer ? alsZeit(lied.dauer) : ''}</span>
       <button class="symbolknopf" data-aktion="menue" data-id="${lied.id}" aria-label="Mehr">${symbol('mehr')}</button>
@@ -229,6 +269,7 @@ function zeichneLieder() {
         <h2>Noch keine Musik</h2>
         <p class="hinweis">Tippe auf „Musik hinzufügen“ und wähle deine MP3-Dateien aus. Sie werden in der App gespeichert und laufen danach auch ohne Internet.</p>
         <button class="pille akzent" data-aktion="hinzufuegen">${symbol('plus')}Musik hinzufügen</button>
+        <button class="pille" data-aktion="onlineEntdecken">${symbol('suche')}Online entdecken</button>
         ${installHinweis()}
       </div>`;
   }
@@ -264,19 +305,229 @@ function sucheLieder(text) {
 }
 
 function zeichneSuche() {
+  const online = suchModus === 'online';
   return `
     <div class="kopfzeile"><h1>Suche</h1></div>
-    <input class="suchfeld" id="suchfeld" type="search" placeholder="Titel, Künstler oder Album" autocomplete="off">
+    <input class="suchfeld" id="suchfeld" type="search" autocomplete="off" value="${sicher(suchText)}"
+           placeholder="${online ? 'Titel, Künstler, Album oder Link' : 'Titel, Künstler oder Album'}">
+    <div class="umschalter">
+      <button data-aktion="suchModus" data-modus="eigene"${online ? '' : ' class="aktiv"'}>Meine Musik</button>
+      <button data-aktion="suchModus" data-modus="online"${online ? ' class="aktiv"' : ''}>Online entdecken</button>
+    </div>
+    <p class="hinweis" id="suchHinweis"></p>
     <ul id="suchTreffer"></ul>`;
 }
 
-/** Wird bei jedem getippten Buchstaben aufgerufen und erneuert nur die Trefferliste. */
+/** Erneuert nur die Trefferliste (das Suchfeld bleibt, damit man weitertippen kann). */
 function zeigeSuchTreffer() {
-  const text = el('suchfeld').value;
-  const treffer = sucheLieder(text);
-  el('suchTreffer').innerHTML = treffer.length
-    ? treffer.map(liedZeile).join('')
-    : (text.trim() ? '<p class="hinweis">Nichts gefunden.</p>' : '');
+  if (!el('suchTreffer')) return;
+  if (suchModus === 'online') { zeigeOnlineTreffer(); return; }
+
+  const treffer = sucheLieder(suchText);
+  el('suchHinweis').textContent = !treffer.length && suchText.trim() ? 'Nichts in deiner Musik gefunden. Unter „Online entdecken“ kannst du im Internet suchen.' : '';
+  el('suchTreffer').innerHTML = treffer.map(liedZeile).join('');
+}
+
+// ---------- Online-Suche ----------
+
+/** Nach dem Tippen kurz warten und erst dann die Quellen fragen (nicht bei jedem Buchstaben). */
+function planeOnlineSuche() {
+  clearTimeout(suchWecker);
+  suchNummer++;
+  if (suchText.trim().length < 2) {
+    onlineTreffer = [];
+    onlineHinweis = '';
+    zeigeOnlineTreffer();
+    return;
+  }
+  onlineHinweis = 'Suche läuft …';
+  zeigeOnlineTreffer();
+  suchWecker = setTimeout(starteOnlineSuche, 600);
+}
+
+async function starteOnlineSuche() {
+  const nummer = ++suchNummer;
+  // Direkt nach einem Update kann noch eine alte Seite offen sein, der das Quellen-Modul fehlt.
+  if (typeof sucheOnline !== 'function') {
+    onlineHinweis = 'Das Update ist noch nicht ganz angekommen. Bitte schließe die App und öffne sie neu.';
+    zeigeOnlineTreffer();
+    return;
+  }
+  if (!navigator.onLine) {
+    onlineTreffer = [];
+    onlineHinweis = 'Keine Internetverbindung. Deine gespeicherte Musik findest du unter „Meine Musik“.';
+    zeigeOnlineTreffer();
+    return;
+  }
+  onlineHinweis = 'Suche läuft …';
+  zeigeOnlineTreffer();
+
+  try {
+    const ergebnis = await sucheOnline(suchText.trim());
+    if (nummer !== suchNummer) return; // inzwischen wurde etwas anderes gesucht
+    onlineTreffer = ergebnis.treffer;
+    const teile = ergebnis.ausgefallen.map(grund => `Nicht erreichbar: ${grund}.`);
+    if (!ergebnis.treffer.length && ergebnis.ausgefallen.length < QUELLEN.length) teile.unshift('Nichts gefunden.');
+    onlineHinweis = teile.join(' ');
+  } catch (fehler) {
+    if (nummer !== suchNummer) return;
+    onlineTreffer = [];
+    onlineHinweis = 'Die Suche ist fehlgeschlagen. Bitte später noch einmal versuchen.';
+  }
+  zeigeOnlineTreffer();
+}
+
+function zeigeOnlineTreffer() {
+  if (!el('suchTreffer') || suchModus !== 'online') return;
+  el('suchHinweis').textContent = onlineHinweis
+    || (onlineTreffer.length ? '' : 'Durchsucht freie Musik bei Jamendo, Freesound, Wikimedia und im Internet Archive.');
+  el('suchTreffer').innerHTML = onlineTreffer.map(trefferZeile).join('');
+}
+
+/**
+ * Das Lied zu einem Suchtreffer: Ist es schon in der Bibliothek, dann dieses.
+ * Sonst ein "Gast", den man anhören kann, ohne ihn zu speichern.
+ */
+function liedFuerTreffer(treffer) {
+  const vorhanden = lieder.find(l => l.schluessel === treffer.schluessel);
+  if (vorhanden) return vorhanden;
+  const id = `gast:${treffer.schluessel}`;
+  if (!gaeste.has(id)) gaeste.set(id, { ...treffer, id, cover: null, offline: false, gast: true });
+  return gaeste.get(id);
+}
+
+function trefferZeile(treffer, nr) {
+  const lied = liedFuerTreffer(treffer);
+  const laeuft = aktuellesLied() && aktuellesLied().id === lied.id;
+  const inBibliothek = !lied.gast;
+  const offline = inBibliothek && !istNurOnline(lied);
+  return `
+    <li class="zeile${laeuft ? ' aktiv' : ''}" data-aktion="spielen" data-id="${sicher(lied.id)}">
+      <div class="cover klein">${coverInhalt(lied)}</div>
+      <div class="zeilen-text">
+        <div class="titel">${sicher(treffer.titel)}</div>
+        <div class="unter"><span class="marke">${sicher(treffer.quelle)}</span>${sicher(treffer.kuenstler || 'Unbekannt')}${treffer.album ? ' · ' + sicher(treffer.album) : ''}</div>
+      </div>
+      <span class="dauer">${treffer.dauer ? alsZeit(treffer.dauer) : ''}</span>
+      <button class="symbolknopf${inBibliothek ? ' an' : ''}" data-aktion="trefferPlus" data-nr="${nr}"
+              aria-label="Zur Bibliothek oder Playlist hinzufügen">${symbol(inBibliothek ? 'haken' : 'plus')}</button>
+      <button class="symbolknopf${offline ? ' an' : ''}${treffer.ladbar ? '' : ' aus'}" data-aktion="trefferOffline" data-nr="${nr}"
+              aria-label="Offline speichern">${symbol('laden')}</button>
+    </li>`;
+}
+
+/**
+ * Nimmt einen Suchtreffer (oder Gast) in die Bibliothek auf. Zunächst als Online-Lied,
+ * die Datei kommt erst mit "Offline speichern" aufs Gerät. Doppelte werden erkannt.
+ */
+async function uebernimm(treffer) {
+  const gleich = l => l.schluessel === treffer.schluessel
+    || (l.titel.toLowerCase() === treffer.titel.toLowerCase() && (l.kuenstler || '').toLowerCase() === (treffer.kuenstler || '').toLowerCase());
+  let lied = lieder.find(gleich);
+  if (lied) return lied;
+
+  lied = {
+    id: crypto.randomUUID(),
+    titel: treffer.titel, kuenstler: treffer.kuenstler, album: treffer.album, dauer: treffer.dauer || 0,
+    cover: null, coverUrl: treffer.coverUrl || '', groesse: 0, hinzugefuegt: Date.now(),
+    offline: false, strom: treffer.strom, ladbar: treffer.ladbar !== false,
+    quelle: treffer.quelle, seite: treffer.seite, lizenz: treffer.lizenz, schluessel: treffer.schluessel,
+  };
+  await dbSetze('lieder', lied);
+  lieder.push(lied);
+
+  // Läuft der Gast gerade oder steht er in der Warteschlange, tritt das neue Bibliotheks-Lied an seine Stelle.
+  const gastId = `gast:${treffer.schluessel}`;
+  basis = basis.map(id => (id === gastId ? lied.id : id));
+  warteschlange = warteschlange.map(id => (id === gastId ? lied.id : id));
+  if (vorgeladen && vorgeladen.id === gastId) vorgeladen.id = lied.id;
+  gaeste.delete(gastId);
+  speichereZustand();
+
+  holeCover(lied);
+  return lied;
+}
+
+/** Speichert das Coverbild aufs Gerät, damit es auch ohne Internet zu sehen ist. */
+async function holeCover(lied) {
+  if (!lied.coverUrl || lied.cover) return;
+  try {
+    const antwort = await fetch(lied.coverUrl);
+    if (!antwort.ok) return;
+    lied.cover = await verkleinere(await antwort.blob(), 512);
+    await dbSetze('lieder', lied);
+  } catch {
+    // Manche Quellen geben ihre Bilder nicht zum Speichern frei. Dann bleibt es bei der Online-Adresse.
+  }
+}
+
+/** Lädt die Tondatei eines Online-Liedes herunter und legt sie dauerhaft auf dem Gerät ab. */
+async function speichereOffline(lied) {
+  if (!istNurOnline(lied)) { zeigeMeldung('Dieses Lied ist schon offline gespeichert.', 2500); return true; }
+  if (lied.ladbar === false) {
+    zeigeMeldung(`${lied.quelle} erlaubt hier nur das Anhören. Das Lied bleibt online in deiner Bibliothek.`, 4500);
+    return false;
+  }
+  if (!navigator.onLine) { zeigeMeldung('Zum Speichern brauchst du eine Internetverbindung.', 3000); return false; }
+
+  zeigeMeldung(`„${lied.titel}“ wird gespeichert …`);
+  try {
+    const antwort = await fetch(lied.strom);
+    if (!antwort.ok) throw new Error(`Fehler ${antwort.status}`);
+    const gesamt = Number(antwort.headers.get('content-length')) || 0;
+    const art = antwort.headers.get('content-type') || 'audio/mpeg';
+
+    // Stück für Stück lesen, damit der Fortschritt angezeigt werden kann.
+    let datei;
+    if (antwort.body && antwort.body.getReader) {
+      const leser = antwort.body.getReader();
+      const teile = [];
+      let geladen = 0;
+      for (;;) {
+        const { done, value } = await leser.read();
+        if (done) break;
+        teile.push(value);
+        geladen += value.length;
+        if (gesamt) zeigeMeldung(`„${lied.titel}“ wird gespeichert … ${Math.round(geladen / gesamt * 100)} %`);
+      }
+      datei = new Blob(teile, { type: art });
+    } else {
+      datei = await antwort.blob();
+    }
+
+    await dbSetze('dateien', datei, lied.id);
+    lied.offline = true;
+    lied.groesse = datei.size;
+    await dbSetze('lieder', lied);
+    await holeCover(lied);
+    zeigeMeldung(`„${lied.titel}“ ist jetzt offline verfügbar.`, 3000);
+    erneuere();
+    return true;
+  } catch (fehler) {
+    // TypeError heißt hier: Die Quelle hat das Herunterladen im Browser nicht freigegeben, oder das Netz ist weg.
+    zeigeMeldung(fehler instanceof TypeError
+      ? 'Diese Quelle lässt das Speichern nicht zu. Das Lied bleibt online hörbar.'
+      : `Speichern fehlgeschlagen (${fehler.message}).`, 4500);
+    return false;
+  }
+}
+
+/** Entfernt nur die gespeicherte Datei. Das Lied bleibt als Online-Lied in der Bibliothek. */
+async function entferneOfflineDatei(lied) {
+  await dbLoesche('dateien', lied.id);
+  lied.offline = false;
+  lied.groesse = 0;
+  await dbSetze('lieder', lied);
+  zeigeMeldung('Offline-Datei entfernt. Das Lied ist jetzt nur noch online hörbar.', 3000);
+  erneuere();
+}
+
+/** Zeichnet die aktuelle Ansicht neu, ohne dass die Liste nach oben springt. */
+function erneuere() {
+  if (ansicht.name === 'suche') { zeigeSuchTreffer(); return; }
+  const hoehe = el('inhalt').scrollTop;
+  zeichne();
+  el('inhalt').scrollTop = hoehe;
 }
 
 function zeichnePlaylists() {
@@ -363,6 +614,21 @@ function spieleStelle() {
   rettungen = 0;
   ladeMarke++; // ein noch laufendes Neuladen des alten Liedes gilt ab jetzt nicht mehr
 
+  // Ohne Internet lassen sich Lieder, die nur online vorliegen, nicht abspielen: zum nächsten gehen.
+  if (istNurOnline(lied) && !navigator.onLine) {
+    zeigeMeldung(`„${lied.titel}“ ist nur online verfügbar.`, 3000);
+    uebersprungen++;
+    if (uebersprungen < warteschlange.length && naechsteStelle(true) >= 0 && naechsteStelle(true) !== stelle) {
+      stelle = naechsteStelle(true);
+      spieleStelle();
+    } else {
+      uebersprungen = 0;
+      zeigeSpielstand();
+    }
+    return;
+  }
+  uebersprungen = 0;
+
   // Nach einer längeren Pause kann das iPhone die App eingefroren haben.
   // Bereitgelegte Dateien sind dann manchmal unbrauchbar, deshalb werden sie frisch geholt.
   if (nachLangerPause()) verwirfVorgeladenes();
@@ -372,7 +638,7 @@ function spieleStelle() {
     aktuelleUrl = url;
     ton.src = url;
     spieleAb('neues Lied');
-    if (alteUrl) URL.revokeObjectURL(alteUrl); // alte Datei aus dem Arbeitsspeicher freigeben
+    if (alteUrl !== url) gibFrei(alteUrl); // alte Datei aus dem Arbeitsspeicher freigeben
     legeNaechstesBereit();
   };
 
@@ -386,10 +652,10 @@ function spieleStelle() {
     verwirfVorgeladenes();
     // Nur bei sichtbarer App: Im Hintergrund würde das Leeren die Tonausgabe des iPhones beenden.
     if (!document.hidden) leereSofort();
-    dbHole('dateien', lied.id).then(datei => {
-      if (!aktuellesLied() || aktuellesLied().id !== lied.id) return; // inzwischen wurde etwas anderes gewählt
-      if (!datei) { naechstes(false); return; }
-      starte(URL.createObjectURL(datei));
+    holeTon(lied).then(url => {
+      if (!aktuellesLied() || aktuellesLied().id !== lied.id) { gibFrei(url); return; } // inzwischen wurde etwas anderes gewählt
+      if (!url) { naechstes(false); return; }
+      starte(url);
     });
   }
 
@@ -405,15 +671,17 @@ function legeNaechstesBereit() {
   const id = warteschlange[naechste];
   if (vorgeladen && vorgeladen.id === id) return;
   verwirfVorgeladenes();
-  dbHole('dateien', id).then(datei => {
-    if (!datei || warteschlange[naechsteStelle(true)] !== id) return;
+  const lied = findeLied(id);
+  if (!lied) return;
+  holeTon(lied).then(url => {
+    if (!url || warteschlange[naechsteStelle(true)] !== id) { gibFrei(url); return; }
     verwirfVorgeladenes();
-    vorgeladen = { id, url: URL.createObjectURL(datei) };
+    vorgeladen = { id, url };
   });
 }
 
 function verwirfVorgeladenes() {
-  if (vorgeladen) URL.revokeObjectURL(vorgeladen.url);
+  if (vorgeladen) gibFrei(vorgeladen.url);
   vorgeladen = null;
 }
 
@@ -562,12 +830,11 @@ function ladeNeu(zeit, danachSpielen, versuch = 0) {
   const marke = ++ladeMarke;
   verwirfVorgeladenes();
 
-  dbHole('dateien', lied.id).then(datei => {
+  holeTon(lied).then(url => {
     // Abbrechen, wenn inzwischen ein anderes Lied oder ein neuerer Ladevorgang dran ist
-    if (!datei || marke !== ladeMarke || !aktuellesLied() || aktuellesLied().id !== lied.id) return;
+    if (!url || marke !== ladeMarke || !aktuellesLied() || aktuellesLied().id !== lied.id) { gibFrei(url); return; }
 
     const alteUrl = aktuelleUrl;
-    const url = URL.createObjectURL(datei);
     aktuelleUrl = url;
     ton.src = url;
     wunschZeit = zeit > 0.5 ? zeit : null;
@@ -577,7 +844,7 @@ function ladeNeu(zeit, danachSpielen, versuch = 0) {
       pruefeLauf(versuch);
     }
     zeigeFortschritt(); // Anzeige gleich auf die gemerkte Stelle stellen
-    if (alteUrl) URL.revokeObjectURL(alteUrl);
+    if (alteUrl !== url) gibFrei(alteUrl);
     legeNaechstesBereit();
   });
 }
@@ -751,7 +1018,7 @@ ton.addEventListener('loadedmetadata', () => {
   const lied = aktuellesLied();
   if (lied && !lied.dauer && isFinite(ton.duration)) {
     lied.dauer = ton.duration;
-    dbSetze('lieder', lied);
+    if (!lied.gast) dbSetze('lieder', lied);   // Gäste aus der Online-Suche werden nicht gespeichert
     document.querySelectorAll(`[data-dauer="${lied.id}"]`).forEach(e => { e.textContent = alsZeit(lied.dauer); });
   }
   zeigeFortschritt();
@@ -809,7 +1076,7 @@ function meldeLiedAnSperrbildschirm(lied) {
     artist: lied.kuenstler || '',
     album: lied.album || '',
     artwork: cover
-      ? [{ src: cover, sizes: '512x512', type: lied.cover.type || 'image/jpeg' }]
+      ? [{ src: cover, sizes: '512x512', type: (lied.cover && lied.cover.type) || 'image/jpeg' }]
       : [{ src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }],
   });
 }
@@ -939,7 +1206,8 @@ async function ermittleDauern(neueLieder) {
 }
 
 async function loescheLied(lied) {
-  if (!confirm(`„${lied.titel}“ von diesem Gerät löschen?`)) return;
+  const frage = istNurOnline(lied) ? `„${lied.titel}“ aus der Bibliothek entfernen?` : `„${lied.titel}“ von diesem Gerät löschen?`;
+  if (!confirm(frage)) return;
   const liefGerade = aktuellesLied() && aktuellesLied().id === lied.id;
 
   await dbLoesche('dateien', lied.id);
@@ -992,15 +1260,56 @@ function zeigeBlatt(titel, eintraege) {
 }
 
 function liedMenue(lied) {
-  const eintraege = [
-    { text: 'Als Nächstes spielen', tue: () => spieleAlsNaechstes(lied) },
-    { text: 'Zu Playlist hinzufügen', tue: () => waehlePlaylist(lied) },
-  ];
-  if (ansicht.name === 'playlist') {
-    eintraege.push({ text: 'Aus dieser Playlist entfernen', tue: () => entferneAusPlaylist(lied) });
+  const eintraege = [];
+
+  if (lied.gast) {
+    // Ein Lied aus der Online-Suche, das noch nicht in der Bibliothek ist
+    eintraege.push({ text: 'Zur Bibliothek hinzufügen', tue: async () => { await uebernimm(lied); zeigeMeldung('Zur Bibliothek hinzugefügt.', 2500); erneuere(); } });
+    eintraege.push({ text: 'Zu Playlist hinzufügen', tue: async () => waehlePlaylist(await uebernimm(lied)) });
+    eintraege.push({ text: 'Offline speichern', tue: async () => { await speichereOffline(await uebernimm(lied)); erneuere(); } });
+  } else {
+    eintraege.push({ text: 'Als Nächstes spielen', tue: () => spieleAlsNaechstes(lied) });
+    eintraege.push({ text: 'Zu Playlist hinzufügen', tue: () => waehlePlaylist(lied) });
+    if (ansicht.name === 'playlist') {
+      eintraege.push({ text: 'Aus dieser Playlist entfernen', tue: () => entferneAusPlaylist(lied) });
+    }
+    if (istNurOnline(lied)) eintraege.push({ text: 'Offline speichern', tue: () => speichereOffline(lied) });
+    else if (lied.strom) eintraege.push({ text: 'Offline-Datei entfernen (bleibt online)', tue: () => entferneOfflineDatei(lied) });
   }
-  eintraege.push({ text: 'Vom Gerät löschen', gefahr: true, tue: () => loescheLied(lied) });
+
+  // Freie Lizenzen verlangen, dass Quelle und Lizenz genannt werden. Hier kann man beides nachsehen.
+  if (lied.seite) {
+    eintraege.push({ text: `Quelle öffnen: ${lied.quelle}${lied.lizenz ? ' · ' + lied.lizenz : ''}`, tue: () => window.open(lied.seite, '_blank', 'noopener') });
+  }
+  if (!lied.gast) {
+    eintraege.push({ text: istNurOnline(lied) ? 'Aus der Bibliothek entfernen' : 'Vom Gerät löschen', gefahr: true, tue: () => loescheLied(lied) });
+  }
   zeigeBlatt(lied.titel, eintraege);
+}
+
+/** Menü hinter dem Plus eines Suchtreffers: in die Bibliothek oder gleich in eine Playlist. */
+function trefferMenue(treffer) {
+  const hinein = async liste => {
+    const lied = await uebernimm(treffer);
+    if (liste && !liste.liedIds.includes(lied.id)) {
+      liste.liedIds.push(lied.id);
+      await dbSetze('playlists', liste);
+    }
+    zeigeMeldung(liste ? `Zu „${liste.name}“ hinzugefügt.` : 'Zur Bibliothek hinzugefügt.', 2500);
+    erneuere();
+  };
+  const eintraege = [{ text: 'Zur Bibliothek hinzufügen', tue: () => hinein(null) }];
+  for (const liste of playlists) eintraege.push({ text: `Zur Playlist „${liste.name}“`, tue: () => hinein(liste) });
+  eintraege.push({
+    text: '+ Neue Playlist', tue: async () => {
+      const name = prompt('Name der neuen Playlist:');
+      if (!name || !name.trim()) return;
+      const liste = { id: crypto.randomUUID(), name: name.trim(), liedIds: [] };
+      playlists.push(liste);
+      await hinein(liste);
+    },
+  });
+  zeigeBlatt(treffer.titel, eintraege);
 }
 
 function spieleAlsNaechstes(lied) {
@@ -1123,7 +1432,8 @@ function nameDerAnsicht() {
     const liste = playlists.find(p => p.id === ansicht.playlistId);
     return liste ? liste.name : '';
   }
-  return ansicht.name === 'suche' ? 'Suche' : 'Deine Musik';
+  if (ansicht.name === 'suche') return suchModus === 'online' ? 'Online-Suche' : 'Suche';
+  return 'Deine Musik';
 }
 
 // Jeder Knopf trägt im HTML ein data-aktion="...". Hier steht, was die Aktion tut.
@@ -1141,6 +1451,25 @@ const AKTIONEN = {
     starteListe(ids, Math.floor(Math.random() * ids.length), nameDerAnsicht());
   },
   diagnose: () => zeigeDiagnose(),
+  suchModus: knopf => {
+    suchModus = knopf.dataset.modus;
+    zeichne();
+    el('suchfeld').focus();
+    // Steht schon ein Suchwort da, gleich online danach suchen.
+    if (suchModus === 'online' && suchText.trim().length >= 2 && !onlineTreffer.length) starteOnlineSuche();
+  },
+  onlineEntdecken: () => { suchModus = 'online'; wechsleAnsicht('suche'); el('suchfeld').focus(); },
+  trefferPlus: knopf => { const treffer = onlineTreffer[Number(knopf.dataset.nr)]; if (treffer) trefferMenue(treffer); },
+  trefferOffline: async knopf => {
+    const treffer = onlineTreffer[Number(knopf.dataset.nr)];
+    if (!treffer) return;
+    if (!treffer.ladbar) {
+      zeigeMeldung(`${treffer.quelle} erlaubt hier nur das Anhören. Über das Plus kommt das Lied als Online-Lied in deine Bibliothek.`, 5000);
+      return;
+    }
+    await speichereOffline(await uebernimm(treffer));
+    erneuere();
+  },
   menue: knopf => { const lied = findeLied(knopf.dataset.id); if (lied) liedMenue(lied); },
   menueAktuell: () => {
     if (!aktuellesLied()) return;
@@ -1176,7 +1505,22 @@ document.addEventListener('click', ereignis => {
   AKTIONEN[ziel.dataset.aktion](ziel, ereignis);
 });
 
-document.addEventListener('input', ereignis => { if (ereignis.target.id === 'suchfeld') zeigeSuchTreffer(); });
+document.addEventListener('input', ereignis => {
+  if (ereignis.target.id !== 'suchfeld') return;
+  suchText = el('suchfeld').value;
+  if (suchModus === 'online') planeOnlineSuche(); else zeigeSuchTreffer();
+});
+
+// Enter im Suchfeld startet die Online-Suche sofort und klappt auf dem Handy die Tastatur ein.
+document.addEventListener('keydown', ereignis => {
+  if (ereignis.key !== 'Enter' || ereignis.target.id !== 'suchfeld') return;
+  el('suchfeld').blur();
+  if (suchModus === 'online' && suchText.trim().length >= 2) { clearTimeout(suchWecker); starteOnlineSuche(); }
+});
+
+// Wechsel zwischen "mit Internet" und "ohne Internet": Listen neu zeichnen (Nur-online-Lieder werden blass).
+window.addEventListener('online', erneuere);
+window.addEventListener('offline', erneuere);
 
 el('dateiWahl').addEventListener('change', async () => {
   const dateien = [...el('dateiWahl').files];

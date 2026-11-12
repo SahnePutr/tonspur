@@ -165,6 +165,52 @@ ul { list-style: none; margin: 0; padding: 0; }
 }
 .suchfeld::placeholder { color: var(--leise); }
 
+/* Umschalter "Meine Musik / Online entdecken" */
+.umschalter {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 12px;
+  background: var(--flaeche);
+  border-radius: 12px;
+}
+.umschalter button {
+  flex: 1;
+  height: 36px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--leise);
+}
+.umschalter button.aktiv { background: var(--flaeche-hell); color: var(--text); }
+
+#suchHinweis { margin: 0 2px 8px; }
+#suchHinweis:empty { display: none; }
+
+/* Kleine Marke vor dem Künstler: "online" oder der Name der Quelle */
+.marke {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--flaeche-hell);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+
+/* Nur-online-Lieder ohne Internet, und Knöpfe, die bei dieser Quelle nichts tun können */
+.zeile.gesperrt { opacity: 0.4; }
+.symbolknopf.aus { opacity: 0.3; }
+
+/* In der Trefferliste stehen zwei Knöpfe nebeneinander: etwas schmaler, damit der Titel Platz hat. */
+#suchTreffer .symbolknopf { width: 36px; }
+#suchTreffer .dauer { display: none; }
+@media (min-width: 480px) { #suchTreffer .dauer { display: inline; } }
+
 /* ---------- Leerer Zustand ---------- */
 .leer { text-align: center; padding: 12vh 12px 0; }
 .leer .kreis {
@@ -175,6 +221,7 @@ ul { list-style: none; margin: 0; padding: 0; }
 .leer .kreis svg { width: 38px; height: 38px; }
 .leer h2 { font-size: 22px; margin: 0 0 8px; }
 .leer .pille { max-width: 260px; margin: 22px auto 0; flex: none; }
+.leer .pille + .pille { margin-top: 10px; }
 
 .kasten {
   background: var(--flaeche);

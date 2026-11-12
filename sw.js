@@ -10,7 +10,7 @@
 //        Ohne Internet die gespeicherte Fassung nehmen.
 // ============================================================================
 
-const CACHE = 'tonspur-app-v4';
+const CACHE = 'tonspur-app-v5';
 const APP_DATEIEN = [
   './',
   'index.html',
@@ -18,6 +18,7 @@ const APP_DATEIEN = [
   'app.js',
   'speicher.js',
   'id3.js',
+  'quellen.js',
   'manifest.webmanifest',
   'icons/apple-touch-icon.png',
   'icons/icon-192.png',
@@ -47,9 +48,10 @@ self.addEventListener('fetch', ereignis => {
   ereignis.respondWith(
     // "no-cache" heißt: immer beim Server nachfragen, ob es eine neuere Fassung gibt.
     // Ohne das könnte der Browser bis zu 10 Minuten lang eine alte Datei liefern.
-    // Beim Öffnen der Seite selbst ("navigate") darf die Anfrage nicht verändert werden,
-    // manche Browser lehnen das ab. Dort wird sie deshalb unverändert weitergegeben.
-    (anfrage.mode === 'navigate' ? fetch(anfrage) : fetch(anfrage, { cache: 'no-cache' }))
+    // Beim Öffnen der Seite selbst ("navigate") darf die ursprüngliche Anfrage nicht verändert
+    // werden, manche Browser lehnen das ab. Deshalb wird dort nur ihre Adresse neu angefragt.
+    // Wichtig: Auch die Seite muss frisch sein. Sonst lädt eine alte index.html neue Skripte nicht.
+    fetch(anfrage.mode === 'navigate' ? anfrage.url : anfrage, { cache: 'no-cache' })
       .then(antwort => {
         // Frische Fassung für das nächste Mal ohne Internet aufheben
         const kopie = antwort.clone();
