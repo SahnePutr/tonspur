@@ -27,7 +27,7 @@ let warteschlange = [];     // dieselben Kennungen in der Abspiel-Reihenfolge (b
 let stelle = -1;            // Welches Lied der Warteschlange gerade dran ist
 let quelle = '';            // Woraus gespielt wird, z. B. der Name der Playlist
 let zufall = false;
-let wiederholen = 'aus';    // 'aus', 'alle' oder 'eins'
+let wiederholen = 'alle';   // 'aus', 'alle' (Liste beginnt nach dem letzten Lied von vorn) oder 'eins'
 
 let aktuelleUrl = null;     // Adresse der Musikdatei, die gerade im Player steckt
 let vorgeladen = null;      // { id, url } des nächsten Liedes, schon bereitgelegt
@@ -45,7 +45,7 @@ let onlineHinweis = '';     // Statuszeile der Online-Suche ("Suche läuft", Feh
 let suchWecker = null;      // wartet kurz nach dem Tippen, bevor online gesucht wird
 let suchNummer = 0;         // zählt Suchen, damit eine alte Antwort keine neuere überschreibt
 let reglerWirdGezogen = false;
-const VERSION = 5;        // steht unten in der Liederliste; so sieht man, ob ein Update angekommen ist
+const VERSION = 6;       // steht unten in der Liederliste; so sieht man, ob ein Update angekommen ist
 
 // Protokoll für die Fehlersuche: Die App schreibt mit, was der Player tut.
 // Ansehen kann man es unter "Lieder" ganz unten über "Diagnose".
@@ -171,10 +171,17 @@ function ladeZustand() {
     stelle = Math.min(z.stelle, warteschlange.length - 1);
     quelle = z.quelle || '';
     zufall = !!z.zufall;
-    wiederholen = z.wiederholen || 'aus';
+    wiederholen = z.wiederholen || 'alle';
     letzteZeit = z.zeit || 0;
   } catch {
     // Unlesbarer Zustand: einfach ohne Warteschlange starten.
+  }
+
+  // Die Endlosschleife ist ab Version 6 von Haus aus an. Wer die App schon vorher benutzt hat,
+  // bekommt sie einmalig eingeschaltet. Danach gilt, was man selbst einstellt.
+  if (!localStorage.getItem('tonspur-schleife-eingefuehrt')) {
+    localStorage.setItem('tonspur-schleife-eingefuehrt', '1');
+    if (wiederholen === 'aus') wiederholen = 'alle';
   }
 }
 
@@ -249,11 +256,35 @@ function liedZeile(lied) {
     </li>`;
 }
 
-const SPIELKNOEPFE = `
+/** Die Knopfreihe über einer Liederliste: Abspielen, Zufällig und die Endlosschleife. */
+function spielKnoepfe() {
+  return `
   <div class="knopfreihe">
     <button class="pille akzent" data-aktion="allesSpielen">${symbol('play')}Abspielen</button>
     <button class="pille" data-aktion="zufaelligSpielen">${symbol('zufall')}Zufällig</button>
+    <button class="pille schmal schleifenknopf${wiederholen !== 'aus' ? ' an' : ''}" data-aktion="schleife"
+            aria-label="Endlosschleife" aria-pressed="${wiederholen !== 'aus'}">${symbol(wiederholen === 'eins' ? 'wiederholenEins' : 'wiederholen')}</button>
   </div>`;
+}
+
+/** Schaltet die Endlosschleife ein oder aus (der Knopf in der Liste kennt nur diese zwei Zustände). */
+function schalteSchleife() {
+  wiederholen = wiederholen === 'aus' ? 'alle' : 'aus';
+  legeNaechstesBereit();
+  zeigeSpielstand();
+  zeigeSchleife();
+  speichereZustand();
+  zeigeMeldung(wiederholen === 'aus' ? 'Endlosschleife aus: Nach dem letzten Lied ist Schluss.' : 'Endlosschleife an: Nach dem letzten Lied geht es von vorn los.', 2500);
+}
+
+/** Bringt alle Schleifen-Knöpfe in den Listen auf den aktuellen Stand. */
+function zeigeSchleife() {
+  document.querySelectorAll('.schleifenknopf').forEach(knopf => {
+    knopf.classList.toggle('an', wiederholen !== 'aus');
+    knopf.setAttribute('aria-pressed', wiederholen !== 'aus');
+    knopf.innerHTML = symbol(wiederholen === 'eins' ? 'wiederholenEins' : 'wiederholen');
+  });
+}
 
 function zeichneLieder() {
   const kopf = `
@@ -274,7 +305,7 @@ function zeichneLieder() {
       </div>`;
   }
 
-  return kopf + SPIELKNOEPFE
+  return kopf + spielKnoepfe()
     + `<ul>${lieder.map(liedZeile).join('')}</ul>`
     + `<p class="fusszeile"><span id="speicherInfo">${lieder.length} Lieder</span> · Version ${VERSION} · <button class="textlink" data-aktion="diagnose">Diagnose</button></p>`;
 }
@@ -567,7 +598,7 @@ function zeichnePlaylist() {
       </div>
       <button class="symbolknopf" data-aktion="playlistMenue" aria-label="Mehr">${symbol('mehr')}</button>
     </div>
-    ${inhalt.length ? SPIELKNOEPFE + `<ul>${inhalt.map(liedZeile).join('')}</ul>`
+    ${inhalt.length ? spielKnoepfe() + `<ul>${inhalt.map(liedZeile).join('')}</ul>`
       : '<p class="hinweis">Diese Playlist ist leer. Geh zu „Lieder“, tippe bei einem Lied auf die drei Punkte und wähle „Zu Playlist hinzufügen“.</p>'}`;
 }
 
@@ -948,6 +979,7 @@ function schalteWiederholen() {
   wiederholen = { aus: 'alle', alle: 'eins', eins: 'aus' }[wiederholen];
   legeNaechstesBereit();
   zeigeSpielstand();
+  zeigeSchleife();
   speichereZustand();
 }
 
@@ -1451,6 +1483,7 @@ const AKTIONEN = {
     starteListe(ids, Math.floor(Math.random() * ids.length), nameDerAnsicht());
   },
   diagnose: () => zeigeDiagnose(),
+  schleife: () => schalteSchleife(),
   suchModus: knopf => {
     suchModus = knopf.dataset.modus;
     zeichne();

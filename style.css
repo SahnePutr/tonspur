@@ -88,6 +88,9 @@ h1 { font-size: 30px; font-weight: 800; margin: 0; letter-spacing: -0.02em; }
   font-size: 15px;
 }
 .pille.akzent { background: var(--akzent); color: #14100e; }
+/* Schmaler Knopf nur mit Symbol (Endlosschleife). Eingeschaltet leuchtet er in der Akzentfarbe. */
+.pille.schmal { flex: none; width: 46px; color: var(--leise); }
+.pille.schmal.an { color: var(--akzent); box-shadow: inset 0 0 0 1.5px var(--akzent); }
 .pille svg { width: 20px; height: 20px; }
 .pille:active, .rundknopf:active, .zeile:active { opacity: 0.6; }
 
