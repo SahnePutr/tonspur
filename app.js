@@ -32,11 +32,13 @@ let wiederholen = 'aus';    // 'aus', 'alle' oder 'eins'
 let aktuelleUrl = null;     // Adresse der Musikdatei, die gerade im Player steckt
 let vorgeladen = null;      // { id, url } des nächsten Liedes, schon bereitgelegt
 let letzteZeit = 0;         // zuletzt sicher bekannte Stelle im Lied (zum Weitermachen und Wiederherstellen)
+let wunschZeit = null;      // Stelle, an die gespult werden soll, sobald das Lied wirklich läuft (null = keine)
+let pruefWecker = null;     // Zeitgeber, der kurz nach dem Start nachsieht, ob das Lied wirklich läuft
 let pausiertSeit = 0;       // Zeitpunkt der letzten Pause (0 = läuft gerade)
 let ladeMarke = 0;          // zählt Ladevorgänge, damit ein veralteter nicht dazwischenfunkt
 let rettungen = 0;          // wie oft der Wächter das aktuelle Lied schon neu laden musste
 let reglerWirdGezogen = false;
-const VERSION = 3;          // steht unten in der Liederliste; so sieht man, ob ein Update angekommen ist
+const VERSION = 4;         // steht unten in der Liederliste; so sieht man, ob ein Update angekommen ist
 
 // Protokoll für die Fehlersuche: Die App schreibt mit, was der Player tut.
 // Ansehen kann man es unter "Lieder" ganz unten über "Diagnose".
@@ -127,7 +129,7 @@ async function start() {
 /** Merkt sich Warteschlange und Stelle, damit die App nach dem Schließen dort weitermacht. */
 function speichereZustand() {
   localStorage.setItem('tonspur-zustand', JSON.stringify({
-    basis, warteschlange, stelle, quelle, zufall, wiederholen, zeit: letzteZeit,
+    basis, warteschlange, stelle, quelle, zufall, wiederholen, zeit: liedZeit(),
   }));
 }
 
@@ -355,6 +357,9 @@ function spieleStelle() {
   const lied = aktuellesLied();
   if (!lied) return;
   letzteZeit = 0;
+  wunschZeit = null;
+  clearTimeout(pruefWecker);
+  ton.muted = false;
   rettungen = 0;
   ladeMarke++; // ein noch laufendes Neuladen des alten Liedes gilt ab jetzt nicht mehr
 
@@ -379,7 +384,8 @@ function spieleStelle() {
   } else {
     merke(`Lied ${stelle + 1} startet (wird geholt)`);
     verwirfVorgeladenes();
-    leereSofort();
+    // Nur bei sichtbarer App: Im Hintergrund würde das Leeren die Tonausgabe des iPhones beenden.
+    if (!document.hidden) leereSofort();
     dbHole('dateien', lied.id).then(datei => {
       if (!aktuellesLied() || aktuellesLied().id !== lied.id) return; // inzwischen wurde etwas anderes gewählt
       if (!datei) { naechstes(false); return; }
@@ -436,9 +442,63 @@ function naechstes(vonSelbst) {
 
 function vorheriges() {
   // Wie bei den meisten Playern: Nach mehr als 3 Sekunden springt "Zurück" erst an den Liedanfang.
-  if (ton.currentTime > 3 || stelle <= 0) { ton.currentTime = 0; return; }
+  if (liedZeit() > 3 || stelle <= 0) { springeZu(0); return; }
   stelle--;
   spieleStelle();
+}
+
+/** Die aktuelle Stelle im Lied. Steht noch ein Spulen aus, zählt dessen Ziel. */
+function liedZeit() {
+  return wunschZeit !== null ? wunschZeit : letzteZeit;
+}
+
+/**
+ * Spult an eine Stelle (Regler, Sperrbildschirm, "Zurück").
+ * Wichtig fürs iPhone: Gespult wird nur, während das Lied wirklich läuft.
+ * Ein Spulbefehl an einen angehaltenen Player bleibt dort manchmal für immer hängen.
+ * Ist das Lied angehalten, wird das Ziel deshalb nur gemerkt und beim Weiterspielen angewendet.
+ */
+function springeZu(ziel) {
+  letzteZeit = ziel;
+  if (!ton.paused && ton.readyState >= 1 && !ton.error) {
+    wunschZeit = null;
+    ton.currentTime = ziel;
+    pruefeLauf(0);
+  } else {
+    wunschZeit = ziel;
+  }
+  zeigeFortschritt();
+  meldePosition();
+}
+
+/**
+ * Sieht 1,5 Sekunden nach einem Start nach, ob die Zeit wirklich weiterläuft.
+ * Wenn nicht: erst zweimal neu spulen (das löst den Hänger meistens), dann das Lied frisch laden.
+ */
+function pruefeLauf(versuch) {
+  clearTimeout(pruefWecker);
+  const zeitVorher = ton.currentTime;
+  pruefWecker = setTimeout(() => {
+    if (ton.paused || !aktuellesLied()) return;
+
+    const laeuft = wunschZeit === null && !ton.seeking && ton.currentTime > zeitVorher + 0.2;
+    if (laeuft) { ton.muted = false; return; }
+
+    const ziel = liedZeit();
+    if (versuch < 2) {
+      merke(`haengt bei ${ton.currentTime.toFixed(1)} s, spule erneut auf ${ziel.toFixed(0)} s`);
+      wunschZeit = ziel;
+      try { ton.currentTime = ziel; } catch { /* Player hat keine Daten: nächster Versuch lädt neu */ }
+      pruefeLauf(versuch + 1);
+    } else if (versuch === 2) {
+      merke('haengt weiter, lade frisch');
+      ladeNeu(ziel, true, 3);
+    } else {
+      merke('Reparatur ohne Erfolg');
+      wunschZeit = null;
+      ton.muted = false;
+    }
+  }, 1500);
 }
 
 function playPause() {
@@ -453,25 +513,28 @@ function nachLangerPause() {
 
 /**
  * Macht nach einer Pause weiter.
- * Das iPhone friert die App ein, wenn eine Weile nichts läuft. Danach tut der Player
- * manchmal nur so, als würde er spielen: kein Ton, Zeit bleibt bei 0:00.
- * Deshalb wird das Lied nach einer längeren Pause frisch aus dem Speicher geholt
- * und an die gemerkte Stelle gespult, statt einfach nur "weiter" zu drücken.
+ * Liegt eine Pause im Hintergrund hinter uns, wirft das iPhone die geladenen Musikdaten weg.
+ * Dann reicht "weiter" nicht: Der Player zeigt "spielt", bleibt aber stumm stehen.
+ * Deshalb wird in dem Fall das Lied frisch geholt. Gespult wird immer erst, wenn es läuft.
  */
 function setzeFort() {
   if (!aktuellesLied()) return;
-  // War das Lied schon zu Ende (letztes Lied der Playlist), beginnt es wieder von vorn.
-  const amEnde = ton.ended || (liedDauer() > 0 && letzteZeit > liedDauer() - 1);
-  const zeit = amEnde ? 0 : letzteZeit;
 
-  if (!ton.src || ton.error || nachLangerPause()) {
-    merke(`weiter nach Pause: frisch laden ab ${zeit.toFixed(0)} s`);
-    leereSofort();
-    ladeNeu(zeit, true);
-  } else {
-    // Normalfall: sofort abspielen, direkt aus dem Tastendruck heraus.
-    merke('weiter: direkt');
+  // War das Lied schon zu Ende (letztes Lied der Playlist), beginnt es wieder von vorn.
+  if (ton.ended || (liedDauer() > 0 && liedZeit() > liedDauer() - 1)) { letzteZeit = 0; wunschZeit = 0; }
+
+  const hatDaten = ton.readyState >= 3;            // 3 = genug Daten zum Abspielen da
+  const wartetAufStart = wunschZeit !== null;       // frisch eingelegt (z. B. nach App-Start) oder im Stand gespult
+  if (ton.src && !ton.error && (hatDaten || wartetAufStart)) {
+    // Sofort abspielen, direkt aus dem Tastendruck heraus.
+    merke(wartetAufStart ? `weiter: direkt, danach spulen auf ${wunschZeit.toFixed(0)} s` : 'weiter: direkt');
+    if (wartetAufStart) ton.muted = true;           // stumm, bis die richtige Stelle erreicht ist
     spieleAb('weiter');
+    pruefeLauf(0);
+  } else {
+    merke(`weiter: frisch laden ab ${liedZeit().toFixed(0)} s (Daten ${ton.readyState})`);
+    if (!document.hidden) leereSofort();
+    ladeNeu(liedZeit(), true);
   }
 }
 
@@ -488,8 +551,12 @@ function leereSofort() {
   ton.load();
 }
 
-/** Legt das aktuelle Lied frisch ein und spult an die Stelle "zeit" (in Sekunden). */
-function ladeNeu(zeit, danachSpielen) {
+/**
+ * Legt das aktuelle Lied frisch ein. Die Stelle "zeit" (in Sekunden) wird nur gemerkt:
+ * Gespult wird erst, wenn das Lied läuft (siehe das Ereignis "playing" weiter unten).
+ * "versuch" zählt mit, wie oft die Reparatur schon dran war.
+ */
+function ladeNeu(zeit, danachSpielen, versuch = 0) {
   const lied = aktuellesLied();
   if (!lied) return;
   const marke = ++ladeMarke;
@@ -503,10 +570,13 @@ function ladeNeu(zeit, danachSpielen) {
     const url = URL.createObjectURL(datei);
     aktuelleUrl = url;
     ton.src = url;
-    if (zeit > 0) {
-      ton.addEventListener('loadedmetadata', () => { if (aktuelleUrl === url) ton.currentTime = zeit; }, { once: true });
+    wunschZeit = zeit > 0.5 ? zeit : null;
+    ton.muted = danachSpielen && wunschZeit !== null; // stumm, bis die richtige Stelle erreicht ist
+    if (danachSpielen) {
+      spieleAb('frisch geladen');
+      pruefeLauf(versuch);
     }
-    if (danachSpielen) spieleAb('frisch geladen');
+    zeigeFortschritt(); // Anzeige gleich auf die gemerkte Stelle stellen
     if (alteUrl) URL.revokeObjectURL(alteUrl);
     legeNaechstesBereit();
   });
@@ -528,7 +598,7 @@ let stillstand = 0;
 setInterval(() => {
   // Nur bei sichtbarer App eingreifen. Im Hintergrund drosselt das iPhone die Uhr der App,
   // dort könnte der Wächter sich irren.
-  if (document.hidden || ton.paused || ton.ended || ton.seeking || !aktuellesLied()) { stillstand = 0; return; }
+  if (document.hidden || ton.paused || ton.ended || !aktuellesLied()) { stillstand = 0; return; }
   if (Math.abs(ton.currentTime - waechterZeit) > 0.05) {
     waechterZeit = ton.currentTime;
     stillstand = 0;
@@ -539,9 +609,56 @@ setInterval(() => {
     rettungen++;
     stillstand = 0;
     merke(`Waechter: Zeit steht bei ${ton.currentTime.toFixed(1)} s, lade neu`);
-    ladeNeu(letzteZeit, true);
+    ladeNeu(liedZeit(), true, 3);
   }
 }, 1500);
+
+// ---------- Wachhalter ----------
+// Problem: Pausiert man bei gesperrtem Bildschirm, friert das iPhone die App nach kurzer Zeit ein.
+// Ein Druck auf die AirPods kommt dann gar nicht mehr an, bis man die App wieder öffnet.
+// Lösung: Ein zweiter, unsichtbarer Player spielt in Dauerschleife Stille. Solange irgendetwas
+// "läuft", bleibt die App wach und die Tonausgabe offen. Das Lied selbst wird ganz normal pausiert.
+const stille = new Audio();
+stille.loop = true;
+let stilleWecker = null;                       // schaltet den Wachhalter nach langer Pause ab
+const WACH_MINUTEN = 20;                       // so lange bleibt die App nach einer Pause wach
+const WACH_AKTIONEN = new Set(['spielen', 'allesSpielen', 'zufaelligSpielen', 'playPause', 'weiter', 'zurueck']);
+
+/** Baut eine kleine Tondatei, die 10 Sekunden lang nichts als Stille enthält (WAV-Format). */
+function stilleDatei() {
+  const rate = 8000, werte = rate * 10;
+  const puffer = new ArrayBuffer(44 + werte * 2);   // 44 Bytes Kopf, danach lauter Nullen = Stille
+  const sicht = new DataView(puffer);
+  const text = (ort, wort) => [...wort].forEach((z, i) => sicht.setUint8(ort + i, z.charCodeAt(0)));
+  text(0, 'RIFF'); sicht.setUint32(4, 36 + werte * 2, true); text(8, 'WAVEfmt ');
+  sicht.setUint32(16, 16, true); sicht.setUint16(20, 1, true); sicht.setUint16(22, 1, true);
+  sicht.setUint32(24, rate, true); sicht.setUint32(28, rate * 2, true);
+  sicht.setUint16(32, 2, true); sicht.setUint16(34, 16, true);
+  text(36, 'data'); sicht.setUint32(40, werte * 2, true);
+  return new Blob([puffer], { type: 'audio/wav' });
+}
+
+/** Startet den Wachhalter. Muss direkt aus einem Tastendruck kommen, sonst erlaubt das iPhone es nicht. */
+function halteWach() {
+  clearTimeout(stilleWecker);
+  if (!stille.src) stille.src = URL.createObjectURL(stilleDatei());
+  if (!stille.paused) return;
+  const versuch = stille.play();
+  if (versuch && versuch.catch) versuch.catch(fehler => merke(`Wachhalter abgelehnt: ${fehler.name}`));
+}
+
+// Nach einer langen Pause den Wachhalter abschalten, damit die App nicht ewig Akku verbraucht.
+ton.addEventListener('pause', () => {
+  clearTimeout(stilleWecker);
+  stilleWecker = setTimeout(() => {
+    if (ton.paused && !stille.paused) { stille.pause(); merke(`Wachhalter aus (${WACH_MINUTEN} Minuten Pause)`); }
+  }, WACH_MINUTEN * 60 * 1000);
+});
+ton.addEventListener('play', () => clearTimeout(stilleWecker));
+
+for (const name of ['play', 'pause', 'error']) {
+  stille.addEventListener(name, () => merke(`Wachhalter: ${name}${document.hidden ? ', im Hintergrund' : ''}`));
+}
 
 function schalteZufall() {
   zufall = !zufall;
@@ -588,12 +705,14 @@ function zeigeSpielstand() {
 
 function zeigeFortschritt() {
   const dauer = liedDauer();
-  const anteil = dauer ? Math.min(1, ton.currentTime / dauer) : 0;
+  // Steht noch ein Spulen aus, zeigt die Anzeige schon dessen Ziel.
+  const zeit = wunschZeit !== null ? wunschZeit : ton.currentTime;
+  const anteil = dauer ? Math.min(1, zeit / dauer) : 0;
   el('miniBalken').style.width = `${anteil * 100}%`;
   if (!reglerWirdGezogen) {
     el('zeitRegler').value = Math.round(anteil * 1000);
     el('zeitRegler').style.setProperty('--stand', `${anteil * 100}%`);
-    el('zeitJetzt').textContent = alsZeit(ton.currentTime);
+    el('zeitJetzt').textContent = alsZeit(zeit);
   }
   el('zeitGesamt').textContent = alsZeit(dauer);
 }
@@ -601,11 +720,29 @@ function zeigeFortschritt() {
 // Was das Ton-Element meldet:
 ton.addEventListener('ended', () => naechstes(true));          // Lied zu Ende: sofort das nächste
 ton.addEventListener('play', () => { zeigeSpielstand(); meldePosition(); });
-ton.addEventListener('playing', () => { pausiertSeit = 0; });   // es kommt wirklich Ton
+ton.addEventListener('playing', () => {
+  pausiertSeit = 0;
+  // Jetzt läuft das Lied wirklich. Erst in diesem Moment wird an die gemerkte Stelle gespult.
+  if (wunschZeit !== null) {
+    merke(`spule nach dem Start auf ${wunschZeit.toFixed(0)} s`);
+    try { ton.currentTime = wunschZeit; } catch { /* der Aufpasser pruefeLauf versucht es erneut */ }
+  }
+});
 ton.addEventListener('pause', () => { pausiertSeit = Date.now(); zeigeSpielstand(); speichereZustand(); });
-ton.addEventListener('seeked', () => { letzteZeit = ton.currentTime; });
+ton.addEventListener('seeked', () => {
+  // Spulen ist angekommen: Ziel erledigt, Ton wieder an.
+  if (wunschZeit !== null && Math.abs(ton.currentTime - wunschZeit) < 2) {
+    wunschZeit = null;
+    ton.muted = false;
+  }
+  if (wunschZeit === null) letzteZeit = ton.currentTime;
+});
 ton.addEventListener('timeupdate', () => {
-  if (ton.currentTime > 0) letzteZeit = ton.currentTime;       // Stelle merken, solange der Player gesund ist
+  // Stelle merken, aber nicht, solange noch ein Spulen aussteht (sonst ginge das Ziel verloren).
+  if (wunschZeit === null && ton.currentTime > 0) {
+    letzteZeit = ton.currentTime;
+    if (ton.muted) ton.muted = false;
+  }
   zeigeFortschritt();
   if (Math.floor(ton.currentTime) % 5 === 0) speichereZustand(); // ungefähr alle 5 Sekunden merken
 });
@@ -623,7 +760,7 @@ ton.addEventListener('loadedmetadata', () => {
 ton.addEventListener('error', () => { if (ton.src) zeigeMeldung('Dieses Lied lässt sich nicht abspielen.', 3000); });
 
 // Fürs Protokoll: jedes wichtige Ereignis des Players mit Zeit und Zustand festhalten.
-for (const name of ['play', 'playing', 'pause', 'waiting', 'stalled', 'ended', 'error', 'emptied']) {
+for (const name of ['play', 'playing', 'pause', 'waiting', 'stalled', 'ended', 'error', 'emptied', 'seeking', 'seeked']) {
   ton.addEventListener(name, () => {
     const fehler = ton.error ? ` Fehler ${ton.error.code}` : '';
     merke(`${name} bei ${ton.currentTime.toFixed(1)} s, Daten ${ton.readyState}${fehler}${document.hidden ? ', im Hintergrund' : ''}`);
@@ -641,10 +778,7 @@ el('zeitRegler').addEventListener('change', () => {
   reglerWirdGezogen = false;
   const ziel = el('zeitRegler').value / 1000 * liedDauer();
   if (!liedDauer()) return;
-  letzteZeit = ziel;
-  // Hat der Player gerade keine Daten (z. B. nach dem Einfrieren), wird das Lied an der Zielstelle neu geladen.
-  if (ton.readyState >= 1 && !ton.error) ton.currentTime = ziel;
-  else ladeNeu(ziel, !ton.paused);
+  springeZu(ziel);
 });
 
 // ---------- 5. Sperrbildschirm, Kontrollzentrum und Kopfhörer ----------
@@ -655,10 +789,10 @@ function richteSperrbildschirmEin() {
   if (!('mediaSession' in navigator)) return;
   const tasten = {
     play: () => setzeFort(),
-    pause: () => ton.pause(),
+    pause: () => { if (ton.paused) merke('Pause-Taste, obwohl schon pausiert'); else ton.pause(); },
     nexttrack: () => naechstes(false),
     previoustrack: () => vorheriges(),
-    seekto: angabe => { if (angabe.seekTime != null) ton.currentTime = angabe.seekTime; },
+    seekto: angabe => { if (angabe.seekTime != null) springeZu(angabe.seekTime); },
   };
   for (const [taste, tue] of Object.entries(tasten)) {
     const mitProtokoll = angabe => { merke(`Taste von aussen: ${taste}`); tue(angabe || {}); };
@@ -687,7 +821,7 @@ function meldePosition() {
   try {
     navigator.mediaSession.setPositionState({
       duration: ton.duration,
-      position: Math.min(ton.currentTime, ton.duration),
+      position: Math.min(wunschZeit !== null ? wunschZeit : ton.currentTime, ton.duration),
       playbackRate: ton.playbackRate || 1,
     });
   } catch { /* ungültige Werte einfach überspringen */ }
@@ -953,6 +1087,9 @@ function zeigeDiagnose() {
     `Daten bereit (0-4): ${ton.readyState}`,
     `Ladezustand (0-3): ${ton.networkState}`,
     `Zeit: ${ton.currentTime.toFixed(1)} von ${ton.duration}`,
+    `spult gerade: ${ton.seeking ? 'ja' : 'nein'}, stumm: ${ton.muted ? 'ja' : 'nein'}`,
+    `ausstehendes Spulziel: ${wunschZeit === null ? '-' : wunschZeit.toFixed(1)}`,
+    `Wachhalter laeuft: ${stille.paused ? 'nein' : 'ja'}`,
     `gemerkte Stelle: ${letzteZeit.toFixed(1)}`,
     `Fehlernummer: ${ton.error ? ton.error.code : 'keine'}`,
     `Rettungen durch den Waechter: ${rettungen}`,
@@ -1032,7 +1169,11 @@ const AKTIONEN = {
 // Ein einziger Klick-Empfänger für die ganze Seite: Er sucht den angeklickten Knopf und führt seine Aktion aus.
 document.addEventListener('click', ereignis => {
   const ziel = ereignis.target.closest('[data-aktion]');
-  if (ziel && AKTIONEN[ziel.dataset.aktion]) AKTIONEN[ziel.dataset.aktion](ziel, ereignis);
+  if (!ziel || !AKTIONEN[ziel.dataset.aktion]) return;
+  // Der Wachhalter muss VOR dem Lied angestoßen werden: Das iPhone zeigt auf dem Sperrbildschirm
+  // den Player, den der Mensch zuletzt bedient hat, und das soll das Lied sein, nicht die Stille.
+  if (WACH_AKTIONEN.has(ziel.dataset.aktion)) halteWach();
+  AKTIONEN[ziel.dataset.aktion](ziel, ereignis);
 });
 
 document.addEventListener('input', ereignis => { if (ereignis.target.id === 'suchfeld') zeigeSuchTreffer(); });

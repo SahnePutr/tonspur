@@ -10,7 +10,7 @@
 //        Ohne Internet die gespeicherte Fassung nehmen.
 // ============================================================================
 
-const CACHE = 'tonspur-app-v3';
+const CACHE = 'tonspur-app-v4';
 const APP_DATEIEN = [
   './',
   'index.html',
