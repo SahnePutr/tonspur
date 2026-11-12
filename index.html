@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Tonspur</title>
+
+  <!-- viewport-fit=cover: Die App darf bis unter die Notch und die Home-Leiste des iPhones reichen. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0c0d11">
+
+  <!-- Diese Zeilen machen aus der Seite eine "App" auf dem iPhone-Home-Bildschirm (Vollbild, eigenes Symbol). -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Tonspur">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="manifest" href="manifest.webmanifest">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Hier zeichnet app.js die jeweilige Ansicht hinein (Lieder, Suche, Playlists). -->
+  <main id="inhalt"></main>
+
+  <!-- Kleiner Player über der Leiste. Ein Tipp darauf öffnet den großen Player. -->
+  <div id="miniPlayer" data-aktion="oeffnePlayer" hidden>
+    <div class="cover klein" id="miniCover"></div>
+    <div class="zeilen-text">
+      <div class="titel" id="miniTitel"></div>
+      <div class="unter" id="miniKuenstler"></div>
+    </div>
+    <button class="symbolknopf" id="miniPlay" data-aktion="playPause" aria-label="Abspielen oder Pause"></button>
+    <div class="mini-fortschritt"><div id="miniBalken"></div></div>
+  </div>
+
+  <!-- Leiste unten mit den drei Bereichen -->
+  <nav class="leiste">
+    <button data-aktion="ansicht" data-ansicht="lieder"><span data-symbol="note"></span>Lieder</button>
+    <button data-aktion="ansicht" data-ansicht="suche"><span data-symbol="suche"></span>Suche</button>
+    <button data-aktion="ansicht" data-ansicht="playlists"><span data-symbol="liste"></span>Playlists</button>
+  </nav>
+
+  <!-- Großer Player (füllt den ganzen Bildschirm) -->
+  <section id="grossPlayer" hidden>
+    <div class="player-kopf">
+      <button class="symbolknopf" data-aktion="schliessePlayer" data-symbol="runter" aria-label="Schließen"></button>
+      <span id="grossQuelle"></span>
+      <button class="symbolknopf" data-aktion="menueAktuell" data-symbol="mehr" aria-label="Mehr"></button>
+    </div>
+    <div class="cover gross" id="grossCover"></div>
+    <div class="player-text">
+      <div class="titel" id="grossTitel"></div>
+      <div class="unter" id="grossKuenstler"></div>
+    </div>
+    <input type="range" id="zeitRegler" min="0" max="1000" value="0" aria-label="Position im Lied">
+    <div class="zeiten"><span id="zeitJetzt">0:00</span><span id="zeitGesamt">0:00</span></div>
+    <div class="steuerung">
+      <button class="symbolknopf" id="zufallKnopf" data-aktion="zufall" data-symbol="zufall" aria-label="Zufällige Reihenfolge"></button>
+      <button class="symbolknopf gross" data-aktion="zurueck" data-symbol="zurueck" aria-label="Vorheriges Lied"></button>
+      <button class="spielknopf" id="grossPlay" data-aktion="playPause" aria-label="Abspielen oder Pause"></button>
+      <button class="symbolknopf gross" data-aktion="weiter" data-symbol="weiter" aria-label="Nächstes Lied"></button>
+      <button class="symbolknopf" id="wiederholenKnopf" data-aktion="wiederholen" data-symbol="wiederholen" aria-label="Wiederholen"></button>
+    </div>
+  </section>
+
+  <!-- Menü, das von unten hereinfährt (z. B. "Zu Playlist hinzufügen") -->
+  <div id="blattHintergrund" data-aktion="blattZu" hidden>
+    <div id="blatt"></div>
+  </div>
+
+  <!-- Meldung am unteren Rand (z. B. "Lied 12 von 300 wird gespeichert") -->
+  <div id="meldung" hidden></div>
+
+  <!-- Unsichtbar: Dateiauswahl und das Element, das den Ton abspielt -->
+  <input type="file" id="dateiWahl" multiple accept="audio/*,.mp3,.m4a,.aac,.wav,.flac" hidden>
+  <audio id="ton" preload="auto"></audio>
+
+  <script src="speicher.js"></script>
+  <script src="id3.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

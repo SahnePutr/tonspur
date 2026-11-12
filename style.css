@@ -1,0 +1,321 @@
+/* ============================================================================
+   Aussehen von Tonspur.
+   Die Farben stehen ganz oben als Variablen. Wer die App umfärben will,
+   ändert nur diese Zeilen.
+   ============================================================================ */
+:root {
+  --hintergrund: #0c0d11;
+  --flaeche: #17181d;
+  --flaeche-hell: #23252d;
+  --text: #f3f1ec;
+  --leise: #9a9ca6;
+  --akzent: #ff7a4d;
+
+  /* Abstände für Notch (oben) und Home-Leiste (unten) des iPhones */
+  --oben: env(safe-area-inset-top, 0px);
+  --unten: env(safe-area-inset-bottom, 0px);
+  --leisten-hoehe: 58px;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--hintergrund);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+svg { width: 24px; height: 24px; display: block; }
+
+[hidden] { display: none !important; }
+
+/* ---------- Inhalt (scrollt) ---------- */
+#inhalt {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: calc(var(--oben) + 20px) 16px calc(var(--unten) + var(--leisten-hoehe) + 90px);
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.kopfzeile {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+h1 { font-size: 30px; font-weight: 800; margin: 0; letter-spacing: -0.02em; }
+
+.hinweis { color: var(--leise); font-size: 14px; line-height: 1.5; }
+
+.rundknopf {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  background: var(--flaeche-hell);
+  display: grid; place-items: center;
+  flex: none;
+}
+
+/* Knöpfe "Abspielen" und "Zufällig" */
+.knopfreihe { display: flex; gap: 10px; margin-bottom: 18px; }
+
+.pille {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  height: 46px;
+  border-radius: 23px;
+  background: var(--flaeche-hell);
+  font-weight: 600;
+  font-size: 15px;
+}
+.pille.akzent { background: var(--akzent); color: #14100e; }
+.pille svg { width: 20px; height: 20px; }
+.pille:active, .rundknopf:active, .zeile:active { opacity: 0.6; }
+
+/* ---------- Liederliste ---------- */
+ul { list-style: none; margin: 0; padding: 0; }
+
+.zeile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 0;
+  cursor: pointer;
+}
+
+.zeilen-text { flex: 1; min-width: 0; }
+.titel, .unter { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.titel { font-size: 16px; }
+.unter { font-size: 13px; color: var(--leise); margin-top: 2px; }
+.zeile.aktiv .titel { color: var(--akzent); }
+.dauer { font-size: 13px; color: var(--leise); font-variant-numeric: tabular-nums; }
+
+.symbolknopf {
+  width: 40px; height: 40px;
+  display: grid; place-items: center;
+  color: var(--leise);
+  flex: none;
+}
+.symbolknopf.gross svg { width: 34px; height: 34px; }
+.symbolknopf.gross { color: var(--text); width: 56px; height: 56px; }
+.symbolknopf.an { color: var(--akzent); }
+
+/* ---------- Cover ---------- */
+.cover {
+  background: var(--flaeche-hell) center / cover no-repeat;
+  display: grid; place-items: center;
+  color: #4a4d58;
+  overflow: hidden;
+  flex: none;
+}
+.cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cover.klein { width: 48px; height: 48px; border-radius: 6px; }
+.cover.mittel { width: 132px; height: 132px; border-radius: 10px; box-shadow: 0 12px 30px #0008; }
+.cover.mittel svg { width: 52px; height: 52px; }
+.cover.gross {
+  width: min(84vw, 46vh, 420px);
+  aspect-ratio: 1;
+  border-radius: 14px;
+  margin: 0 auto;
+  box-shadow: 0 20px 50px #000a;
+}
+.cover.gross svg { width: 96px; height: 96px; }
+
+/* ---------- Playlist-Kopf ---------- */
+.playlist-kopf { display: flex; gap: 16px; align-items: flex-end; margin-bottom: 20px; }
+.playlist-kopf h1 { font-size: 26px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.playlist-kopf .zeilen-text { padding-bottom: 4px; }
+
+.zurueck-link { display: flex; align-items: center; gap: 4px; color: var(--leise); font-size: 14px; margin-bottom: 14px; }
+.zurueck-link svg { width: 18px; height: 18px; transform: rotate(90deg); }
+
+/* ---------- Suche ---------- */
+.suchfeld {
+  width: 100%;
+  height: 46px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--flaeche-hell);
+  color: var(--text);
+  font: inherit;
+  padding: 0 14px;
+  margin-bottom: 14px;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.suchfeld::placeholder { color: var(--leise); }
+
+/* ---------- Leerer Zustand ---------- */
+.leer { text-align: center; padding: 12vh 12px 0; }
+.leer .kreis {
+  width: 88px; height: 88px; border-radius: 50%;
+  background: var(--flaeche-hell); color: var(--akzent);
+  display: grid; place-items: center; margin: 0 auto 22px;
+}
+.leer .kreis svg { width: 38px; height: 38px; }
+.leer h2 { font-size: 22px; margin: 0 0 8px; }
+.leer .pille { max-width: 260px; margin: 22px auto 0; flex: none; }
+
+.kasten {
+  background: var(--flaeche);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-top: 22px;
+  text-align: left;
+}
+.kasten b { color: var(--text); }
+
+.fusszeile { margin-top: 24px; text-align: center; font-size: 12px; color: var(--leise); }
+
+/* ---------- Kleiner Player ---------- */
+#miniPlayer {
+  position: fixed;
+  left: 8px; right: 8px;
+  bottom: calc(var(--unten) + var(--leisten-hoehe) + 6px);
+  max-width: 744px;
+  margin: 0 auto;
+  background: var(--flaeche-hell);
+  border-radius: 10px;
+  padding: 7px 4px 7px 7px;
+  display: flex; align-items: center; gap: 10px;
+  box-shadow: 0 8px 24px #0009;
+  cursor: pointer;
+  overflow: hidden;
+}
+#miniPlayer .cover.klein { width: 42px; height: 42px; }
+#miniPlayer .titel { font-size: 14px; font-weight: 600; }
+#miniPlayer .symbolknopf { color: var(--text); width: 44px; height: 44px; }
+.mini-fortschritt { position: absolute; left: 8px; right: 8px; bottom: 0; height: 2px; background: #fff2; }
+#miniBalken { height: 100%; width: 0; background: var(--akzent); }
+
+/* ---------- Leiste unten ---------- */
+.leiste {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  height: calc(var(--leisten-hoehe) + var(--unten));
+  padding-bottom: var(--unten);
+  display: flex;
+  background: linear-gradient(to top, var(--hintergrund) 70%, transparent);
+}
+.leiste button {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  font-size: 11px;
+  color: var(--leise);
+}
+.leiste button.aktiv { color: var(--text); }
+
+/* ---------- Großer Player ---------- */
+#grossPlayer {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: linear-gradient(to bottom, #3a2a26, var(--hintergrund) 70%);
+  padding: calc(var(--oben) + 10px) 24px calc(var(--unten) + 24px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  animation: hoch 0.25s ease-out;
+}
+@keyframes hoch { from { transform: translateY(100%); } }
+
+.player-kopf { display: flex; align-items: center; justify-content: space-between; margin: 0 -10px; }
+.player-kopf span { font-size: 12px; font-weight: 600; color: var(--leise); text-transform: uppercase; letter-spacing: 0.08em; }
+.player-kopf .symbolknopf { color: var(--text); }
+
+.player-text .titel { font-size: 22px; font-weight: 700; }
+.player-text .unter { font-size: 16px; margin-top: 4px; }
+
+.zeiten { display: flex; justify-content: space-between; font-size: 12px; color: var(--leise); margin-top: -14px; font-variant-numeric: tabular-nums; }
+
+.steuerung { display: flex; align-items: center; justify-content: space-between; }
+
+.spielknopf {
+  width: 68px; height: 68px;
+  border-radius: 50%;
+  background: var(--text);
+  color: #14100e;
+  display: grid; place-items: center;
+}
+.spielknopf svg { width: 30px; height: 30px; }
+.spielknopf:active { transform: scale(0.94); }
+
+/* Schieberegler für die Position im Lied */
+input[type=range] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 24px;
+  background: transparent;
+  margin: 0;
+  --stand: 0%;
+}
+input[type=range]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px;
+  background: linear-gradient(to right, var(--text) var(--stand), #fff3 var(--stand));
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--text);
+  margin-top: -5px;
+}
+input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: #fff3; }
+input[type=range]::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--text); }
+input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: 50%; background: var(--text); }
+
+/* ---------- Menü von unten ---------- */
+#blattHintergrund {
+  position: fixed; inset: 0; z-index: 20;
+  background: #000a;
+  display: flex; align-items: flex-end;
+}
+#blatt {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  max-height: 75vh;
+  overflow-y: auto;
+  background: var(--flaeche);
+  border-radius: 16px 16px 0 0;
+  padding: 10px 8px calc(var(--unten) + 12px);
+  animation: hoch 0.2s ease-out;
+}
+#blatt .blatt-titel { padding: 10px 12px 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#blatt button { display: block; width: 100%; text-align: left; padding: 14px 12px; border-radius: 8px; font-size: 16px; }
+#blatt button:active { background: var(--flaeche-hell); }
+#blatt button.gefahr { color: #ff6b6b; }
+
+/* ---------- Meldung ---------- */
+#meldung {
+  position: fixed; z-index: 30;
+  left: 16px; right: 16px;
+  bottom: calc(var(--unten) + var(--leisten-hoehe) + 76px);
+  max-width: 500px; margin: 0 auto;
+  background: var(--text); color: #14100e;
+  border-radius: 10px;
+  padding: 12px 16px;
+  font-size: 14px; font-weight: 600;
+  text-align: center;
+  box-shadow: 0 8px 24px #000a;
+}
